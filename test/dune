@@ -1,6 +1,13 @@
 (library
  (name nav_tests)
  (inline_tests)
- (libraries core nav_domain nav_graph nav_source)
+ (libraries
+  core
+  core_unix
+  core_unix.filename_unix
+  nav_data
+  nav_domain
+  nav_graph
+  nav_source)
  (preprocess
   (pps ppx_jane)))

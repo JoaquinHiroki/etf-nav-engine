@@ -1,5 +1,14 @@
-(executable
- (name check_services)
- (libraries core kafka postgresql nav_config)
+(executables
+ (names check_services generate replay)
+ (libraries
+  core
+  core_unix
+  core_unix.command_unix
+  kafka
+  postgresql
+  nav_config
+  nav_data
+  nav_domain
+  nav_kafka)
  (preprocess
   (pps ppx_jane)))

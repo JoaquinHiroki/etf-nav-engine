@@ -35,3 +35,11 @@ let key = function
   | Etf_price { etf; _ } | Rebalance { etf; _ } -> etf
   | Composition { composition; _ } -> composition.etf
 ;;
+
+let with_ts t ts =
+  match t with
+  | Price p -> Price { p with ts }
+  | Etf_price p -> Etf_price { p with ts }
+  | Composition c -> Composition { c with ts }
+  | Rebalance r -> Rebalance { r with ts }
+;;

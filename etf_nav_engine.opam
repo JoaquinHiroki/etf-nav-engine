@@ -10,6 +10,7 @@ depends: [
   "ocaml" {= "4.14.2"}
   "core" {>= "v0.16" & < "v0.17"}
   "ppx_jane" {>= "v0.16" & < "v0.17"}
+  "core_unix" {>= "v0.16" & < "v0.17"}
   "incremental" {>= "v0.16" & < "v0.17"}
   "kafka" {= "0.5"}
   "postgresql" {= "5.2.0"}

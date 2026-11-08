@@ -26,6 +26,10 @@
    (and
     (>= v0.16)
     (< v0.17)))
+  (core_unix
+   (and
+    (>= v0.16)
+    (< v0.17)))
   (incremental
    (and
     (>= v0.16)

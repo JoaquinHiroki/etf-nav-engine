@@ -1,10 +1,13 @@
 OCAML_VERSION := 4.14.2
 
-.PHONY: setup build test integration fmt up down check clean
+EVENTS ?= 10000000
+DATA := data/generated/synthetic.events
+
+.PHONY: setup build test integration fmt up down check data replay clean
 
 setup:
 	test -d _opam || opam switch create . ocaml-base-compiler.$(OCAML_VERSION) --no-install --yes
-	opam install . --deps-only --with-test --yes
+	opam install . --deps-only --with-test --working-dir --yes
 	opam install ocaml-lsp-server ocamlformat.0.26.2 --yes
 
 build:
@@ -28,6 +31,13 @@ down:
 
 check: build up
 	opam exec -- dune exec bin/check_services.exe
+
+data:
+	mkdir -p data/generated
+	opam exec -- dune exec --profile release bin/generate.exe -- -output $(DATA) -events $(EVENTS)
+
+replay: up
+	opam exec -- dune exec --profile release bin/replay.exe -- -input $(DATA) $(if $(RATE),-rate $(RATE))
 
 clean:
 	opam exec -- dune clean

@@ -39,8 +39,13 @@ exit test passing and a commit.
 ## 4. Data at scale
 
 - Seeded synthetic generator: ETF count, basket size, symbol overlap, rebalance progress events.
-- Exporter from PITLake Binance trades and Gold minute bars into the event file format.
+- Event file format: length-prefixed `bin_prot` records.
 - `replay` tool: file to topic at full speed or a fixed rate.
+- Exporter from PITLake Binance trades and Gold minute bars into the event file format (pending).
+
+Measured on the development laptop (Intel MacBook, Redpanda in Docker), 2026-11-08:
+generating 10M events takes 12 s and 278 MB on disk; full-speed replay publishes about
+715k events/s; fixed-rate replay at 20k/s holds 19,985/s while busy-waiting one core.
 
 ## 5. Baseline service
 

@@ -1,0 +1,5 @@
+(executable
+ (name check_services)
+ (libraries core kafka postgresql)
+ (preprocess
+  (pps ppx_jane)))

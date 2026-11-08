@@ -1,0 +1,6 @@
+(library
+ (name nav_tests)
+ (inline_tests)
+ (libraries core nav_domain nav_source)
+ (preprocess
+  (pps ppx_jane)))

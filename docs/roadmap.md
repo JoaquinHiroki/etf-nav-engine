@@ -31,9 +31,10 @@ exit test passing and a commit.
 
 ## 3. Full recompute
 
-- Balanced-tree sum with a fixed shape.
+- Balanced-tree sum with a fixed shape ([ADR 0002](adr/0002-summation-tree.md)).
 - Pure `Full_recompute`: state is a fold over events, NAV and premium per ETF.
 - This becomes the test oracle and the computational baseline.
+- Rebalance events are ignored until stage 9.
 
 ## 4. Data at scale
 

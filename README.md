@@ -4,7 +4,7 @@ A single-process OCaml service that keeps ETF net asset value current from a Kaf
 stream, recomputing only what each event changes. After every event the incremental result
 must equal a full recompute exactly.
 
-Status: stage 2 of 10. See [docs/roadmap.md](docs/roadmap.md).
+Status: stage 3 of 10. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 
@@ -45,6 +45,7 @@ make setup
 bin/          entry points
 lib/config/   connection settings, overridable by environment
 lib/domain/   events, compositions, NAV formulas
+lib/graph/    summation tree and full recompute
 lib/source/   replayable event source interface and in-memory source
 lib/kafka/    Kafka consumer (a Source) and producer
 lib/store/    Postgres persistence

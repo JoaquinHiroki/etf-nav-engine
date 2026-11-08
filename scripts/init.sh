@@ -4,7 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 rpk() { docker compose exec -T redpanda rpk "$@"; }
-psql() { docker compose exec -T postgres psql -U nav -v ON_ERROR_STOP=1 -q "$@"; }
+psql() {
+  docker compose exec -T -e PGOPTIONS="-c client_min_messages=warning" postgres \
+    psql -U nav -v ON_ERROR_STOP=1 -q "$@"
+}
 
 for topic in etf.events.v1 etf.events.test; do
   rpk topic describe "$topic" >/dev/null 2>&1 || rpk topic create "$topic" --partitions 1

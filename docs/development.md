@@ -1,6 +1,6 @@
 # Development
 
-Status: stage 4 of 10. See [roadmap.md](roadmap.md).
+Status: stage 5 of 10. See [roadmap.md](roadmap.md).
 
 ## Requirements
 
@@ -28,6 +28,7 @@ make setup
 | `make check` | Connect to both services from OCaml |
 | `make data` | Generate `data/generated/synthetic.events` (`EVENTS=10000000` by default) |
 | `make replay` | Publish the generated file to `etf.events.v1` at full speed, or at `RATE=N` events per second |
+| `make engine ARGS="..."` | Run the engine; see the examples below |
 | `make fmt` | Format the code |
 
 ## Services
@@ -51,6 +52,22 @@ With `RATE`, `replay` sends event *i* at *start + i/RATE* and stamps it with tha
 time, so latency can be measured from when the event was due rather than when it was
 sent. It busy-waits between events, which keeps one CPU core busy.
 
+## Running the engine
+
+```sh
+make engine ARGS="-writer none -input data/generated/synthetic.events -batch 1000"
+make engine ARGS="-writer baseline -reset -batch 1 -max-events 20000"
+```
+
+`-writer none` measures computation only. `-writer baseline` persists every event through
+the baseline write path. Without `-input` the engine reads `etf.events.v1`. `-reset`
+truncates the tables and starts from offset 0; without it the engine restores state from
+Postgres and continues from the stored offset. Add `-scheduled` when the topic was filled
+with `make replay RATE=N` to report latency since each event's scheduled send time.
+
+The engine prints a report with throughput, latency percentiles and database reads,
+writes and transactions.
+
 ## Layout
 
 ```
@@ -62,6 +79,7 @@ lib/data/     event file format and synthetic generator
 lib/source/   replayable event source interface and in-memory source
 lib/kafka/    Kafka consumer (a Source) and producer
 lib/store/    Postgres persistence
+lib/engine/   engine loop, writers and recovery
 sql/          schema
 scripts/      topic and database setup
 test/         unit, expect and property tests

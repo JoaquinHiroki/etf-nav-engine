@@ -3,7 +3,7 @@ OCAML_VERSION := 4.14.2
 EVENTS ?= 10000000
 DATA := data/generated/synthetic.events
 
-.PHONY: setup build test integration fmt up down check data replay clean
+.PHONY: setup build test integration fmt up down check data replay engine clean
 
 setup:
 	test -d _opam || opam switch create . ocaml-base-compiler.$(OCAML_VERSION) --no-install --yes
@@ -38,6 +38,9 @@ data:
 
 replay: up
 	opam exec -- dune exec --profile release bin/replay.exe -- -input $(DATA) $(if $(RATE),-rate $(RATE))
+
+engine: up
+	opam exec -- dune exec --profile release bin/engine.exe -- $(ARGS)
 
 clean:
 	opam exec -- dune clean

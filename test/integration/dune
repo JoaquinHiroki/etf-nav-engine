@@ -1,6 +1,15 @@
-(executable
- (name round_trip)
- (libraries core nav_config nav_domain nav_kafka nav_source nav_store)
+(executables
+ (names round_trip baseline)
+ (libraries
+  core
+  nav_config
+  nav_data
+  nav_domain
+  nav_engine
+  nav_graph
+  nav_kafka
+  nav_source
+  nav_store)
  (preprocess
   (pps ppx_jane)))
 
@@ -8,4 +17,6 @@
  (alias integration)
  (deps (universe))
  (action
-  (run %{exe:round_trip.exe})))
+  (progn
+   (run %{exe:round_trip.exe})
+   (run %{exe:baseline.exe}))))

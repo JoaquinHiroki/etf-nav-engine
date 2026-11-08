@@ -1,0 +1,5 @@
+(library
+ (name nav_engine)
+ (libraries core nav_domain nav_graph nav_source nav_store)
+ (preprocess
+  (pps ppx_jane)))

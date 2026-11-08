@@ -25,3 +25,4 @@ jobs:
       - run: opam exec -- dune build @integration
       - run: opam exec -- dune exec bin/generate.exe -- -output synthetic.events -events 100000
       - run: opam exec -- dune exec bin/replay.exe -- -input synthetic.events -topic etf.events.test
+      - run: opam exec -- dune exec bin/engine.exe -- -writer none -input synthetic.events -idle-seconds 1

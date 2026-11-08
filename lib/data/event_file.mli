@@ -8,3 +8,7 @@ val with_writer : string -> f:((Event.t -> unit) -> 'a) -> 'a
 val fold : ?limit:int -> string -> init:'acc -> f:('acc -> Event.t -> 'acc) -> 'acc
 val iter : ?limit:int -> string -> f:(Event.t -> unit) -> unit
 val read_all : ?limit:int -> string -> Event.t array
+
+(** Streams the file as a [Source.t] whose offsets are record indexes. [seek] reopens
+    the file and skips records. *)
+val source : string -> Nav_source.Source.t

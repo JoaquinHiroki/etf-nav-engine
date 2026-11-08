@@ -43,3 +43,8 @@ let with_ts t ts =
   | Composition c -> Composition { c with ts }
   | Rebalance r -> Rebalance { r with ts }
 ;;
+
+let ts = function
+  | Price { ts; _ } | Etf_price { ts; _ } | Composition { ts; _ } | Rebalance { ts; _ } ->
+    ts
+;;

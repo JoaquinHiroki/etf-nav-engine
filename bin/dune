@@ -1,5 +1,5 @@
 (executables
- (names check_services generate replay)
+ (names check_services engine generate replay)
  (libraries
   core
   core_unix
@@ -9,6 +9,9 @@
   nav_config
   nav_data
   nav_domain
-  nav_kafka)
+  nav_engine
+  nav_graph
+  nav_kafka
+  nav_store)
  (preprocess
   (pps ppx_jane)))

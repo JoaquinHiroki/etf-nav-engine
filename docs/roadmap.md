@@ -49,9 +49,26 @@ generating 10M events takes 12 s and 278 MB on disk; full-speed replay publishes
 
 ## 5. Baseline service
 
-- Engine loop over a `Source`, using full recompute.
-- Baseline Postgres writer: read before write, one transaction per event, readback check.
-- End-to-end harness and first baseline numbers.
+- Engine loop over a `Source`, using full recompute of every affected ETF.
+- Baseline Postgres writer: read before write, one transaction per event, readback check
+  ([ADR 0003](adr/0003-baseline-and-price-tables.md)).
+- `price` and `etf_price` tables so state can be restored after a restart.
+- `bin/engine.exe` reports throughput, latency percentiles and database operations.
+
+First numbers, 2026-11-08, on the development laptop (Intel MacBook, Redpanda and
+Postgres 16.4 in Docker Desktop, default Postgres settings, `synchronous_commit` on),
+synthetic data from `make data` (seed 42, 2,000 symbols, 100 ETFs of 50 holdings):
+
+| Run | Events | Events/s | p50 | p99 |
+|-----|--------|----------|-----|-----|
+| Engine only, file, batch 1000 | 10M | 81,000 | 11.4 ms | 22.0 ms |
+| Engine only, Kafka, batch 1000 | 10M | 38,700 | 21.7 ms | 82.6 ms |
+| Baseline writer, Kafka, batch 1 | 20k | 63 | 13.9 ms | 42.6 ms |
+| Baseline writer, Kafka, batch 100 | 20k | 83 | 1.16 s | 2.54 s |
+
+Latency is measured per batch, from the poll that returned it to the end of its write.
+Each event recomputes 2.5 ETFs on average. The baseline makes 8.4 statements per event
+plus BEGIN/COMMIT, 2.0 reads per write. Single runs, not yet the five-run median.
 
 ## 6. Incremental graph
 

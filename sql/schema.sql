@@ -32,3 +32,17 @@ CREATE TABLE IF NOT EXISTS consumer_offset (
   topic text PRIMARY KEY,
   next_offset bigint NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS price (
+  symbol text PRIMARY KEY,
+  price double precision NOT NULL,
+  source_offset bigint NOT NULL,
+  ts timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS etf_price (
+  etf text PRIMARY KEY,
+  price double precision NOT NULL,
+  source_offset bigint NOT NULL,
+  ts timestamptz NOT NULL
+);

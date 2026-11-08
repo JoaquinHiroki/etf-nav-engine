@@ -10,6 +10,7 @@ type record =
 type t =
   { seek : int -> unit
   ; poll : max:int -> record list
+  ; close : unit -> unit
   }
 
 let in_memory events =
@@ -21,5 +22,5 @@ let in_memory events =
     next := first + count;
     List.init count ~f:(fun i -> { offset = first + i; event = events.(first + i) })
   in
-  { seek; poll }
+  { seek; poll; close = ignore }
 ;;

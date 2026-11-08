@@ -20,4 +20,6 @@ jobs:
       - run: opam exec -- dune test
 
       - run: docker compose up -d --wait
+      - run: ./scripts/init.sh
       - run: opam exec -- dune exec bin/check_services.exe
+      - run: opam exec -- dune build @integration

@@ -29,3 +29,9 @@ include T
 
 let to_string = Binable.to_string (module T)
 let of_string = Binable.of_string (module T)
+
+let key = function
+  | Price { symbol; _ } -> symbol
+  | Etf_price { etf; _ } | Rebalance { etf; _ } -> etf
+  | Composition { composition; _ } -> composition.etf
+;;

@@ -13,6 +13,7 @@ depends: [
   "incremental" {>= "v0.16" & < "v0.17"}
   "kafka" {= "0.5"}
   "postgresql" {= "5.2.0"}
+  "yojson" {>= "2.0"}
   "odoc" {with-doc}
 ]
 build: [

@@ -1,0 +1,5 @@
+(library
+ (name nav_store)
+ (libraries core postgresql yojson nav_domain)
+ (preprocess
+  (pps ppx_jane)))

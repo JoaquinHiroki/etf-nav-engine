@@ -1,5 +1,5 @@
 (executable
  (name check_services)
- (libraries core kafka postgresql)
+ (libraries core kafka postgresql nav_config)
  (preprocess
   (pps ppx_jane)))

@@ -1,0 +1,5 @@
+(library
+ (name nav_kafka)
+ (libraries core kafka nav_domain nav_source)
+ (preprocess
+  (pps ppx_jane)))

@@ -4,7 +4,7 @@ A single-process OCaml service that keeps ETF net asset value current from a Kaf
 stream, recomputing only what each event changes. After every event the incremental result
 must equal a full recompute exactly.
 
-Status: stage 1 of 10. See [docs/roadmap.md](docs/roadmap.md).
+Status: stage 2 of 10. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Requirements
 
@@ -27,16 +27,30 @@ make setup
 |---------|--------------|
 | `make build` | Build everything |
 | `make test` | Run unit and property tests |
-| `make up` / `make down` | Start or stop Redpanda and Postgres |
+| `make up` / `make down` | Start or stop Redpanda and Postgres, create topics and apply the schema |
+| `make integration` | Publish an event, consume it and persist it through Postgres |
 | `make check` | Connect to both services from OCaml |
 | `make fmt` | Format the code |
+
+## Services
+
+| Service | Address | Notes |
+|---------|---------|-------|
+| Redpanda | `localhost:9092` | Topics `etf.events.v1` and `etf.events.test`, one partition each |
+| Postgres | `localhost:55432` | User, password and database `nav`; tests use `nav_test` |
 
 ## Layout
 
 ```
 bin/          entry points
+lib/config/   connection settings, overridable by environment
 lib/domain/   events, compositions, NAV formulas
-lib/source/   replayable event sources
-test/         expect and property tests
+lib/source/   replayable event source interface and in-memory source
+lib/kafka/    Kafka consumer (a Source) and producer
+lib/store/    Postgres persistence
+sql/          schema
+scripts/      topic and database setup
+test/         unit, expect and property tests
+test/integration/  tests against Redpanda and Postgres
 docs/         roadmap and architecture decisions
 ```

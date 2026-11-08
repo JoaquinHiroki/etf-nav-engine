@@ -1,6 +1,6 @@
 OCAML_VERSION := 4.14.2
 
-.PHONY: setup build test fmt up down check clean
+.PHONY: setup build test integration fmt up down check clean
 
 setup:
 	test -d _opam || opam switch create . ocaml-base-compiler.$(OCAML_VERSION) --no-install --yes
@@ -13,11 +13,15 @@ build:
 test:
 	opam exec -- dune test
 
+integration: up
+	opam exec -- dune build @integration
+
 fmt:
 	opam exec -- dune fmt
 
 up:
 	docker compose up -d --wait
+	./scripts/init.sh
 
 down:
 	docker compose down -v

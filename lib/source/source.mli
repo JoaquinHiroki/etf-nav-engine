@@ -13,6 +13,7 @@ type record =
 type t =
   { seek : int -> unit
   ; poll : max:int -> record list
+  ; close : unit -> unit
   }
 
 val in_memory : Event.t array -> t

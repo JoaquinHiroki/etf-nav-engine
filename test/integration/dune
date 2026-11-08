@@ -1,0 +1,11 @@
+(executable
+ (name round_trip)
+ (libraries core nav_config nav_domain nav_kafka nav_source nav_store)
+ (preprocess
+  (pps ppx_jane)))
+
+(rule
+ (alias integration)
+ (deps (universe))
+ (action
+  (run %{exe:round_trip.exe})))

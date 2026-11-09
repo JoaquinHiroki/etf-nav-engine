@@ -72,9 +72,25 @@ plus BEGIN/COMMIT, 2.0 reads per write. Single runs, not yet the five-run median
 
 ## 6. Incremental graph
 
-- One `Incremental` variable per symbol, shared across ETFs.
+- One `Incremental` variable per symbol, shared across ETFs
+  ([ADR 0004](adr/0004-incremental-graph.md)).
 - `bind` on composition so swaps replace the ETF subgraph.
+- Bitwise cutoff on every float node.
 - Recompute counter inside node functions.
+- Property test: after every event, NAV, premium and ETF price equal `Full_recompute` bit
+  for bit, on random streams with edge-case floats and on a synthetic stream.
+
+Node recomputations over the test's synthetic stream (30,000 events, 120 symbols, 8 ETFs
+of 32 holdings, stabilizing after every event), compared with the work `Full_recompute`
+does for the same events:
+
+| Nodes | Full recompute | Incremental | Ratio |
+|-------|----------------|-------------|-------|
+| Positions (`units *. price`) | 1,926,912 | 63,711 | 30.2x |
+| Sums | 1,866,696 | 300,614 | 6.2x |
+
+A tick recomputes one leaf instead of 32 and five sums (log2 32) instead of 31. These
+are node counts, not time; stage 7 measures throughput with batched stabilization.
 
 ## 7. Batched engine
 

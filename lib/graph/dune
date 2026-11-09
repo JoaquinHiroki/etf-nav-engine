@@ -1,5 +1,5 @@
 (library
  (name nav_graph)
- (libraries core nav_domain)
+ (libraries core incremental nav_domain)
  (preprocess
   (pps ppx_jane)))

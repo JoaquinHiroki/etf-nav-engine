@@ -1,6 +1,6 @@
 # Development
 
-Status: stage 5 of 10. See [roadmap.md](roadmap.md).
+Status: stage 6 of 10. See [roadmap.md](roadmap.md).
 
 ## Requirements
 
@@ -74,7 +74,7 @@ writes and transactions.
 bin/          entry points
 lib/config/   connection settings, overridable by environment
 lib/domain/   events, compositions, NAV formulas
-lib/graph/    summation tree and full recompute
+lib/graph/    summation tree, full recompute and incremental graph
 lib/data/     event file format and synthetic generator
 lib/source/   replayable event source interface and in-memory source
 lib/kafka/    Kafka consumer (a Source) and producer

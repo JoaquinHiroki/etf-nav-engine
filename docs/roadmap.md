@@ -94,9 +94,50 @@ are node counts, not time; stage 7 measures throughput with batched stabilizatio
 
 ## 7. Batched engine
 
-- Apply a batch, stabilize once; observers per ETF NAV and premium.
-- Per-event latency measured against scheduled send time.
-- Oracle check running alongside multi-million event replays.
+- Apply a batch, stabilize once; observers per ETF NAV and premium
+  ([ADR 0005](adr/0005-batched-engine.md)).
+- Only ETFs whose NAV or premium changed are reported, on the batch's last change.
+- Per-event latency measured against scheduled send time (`-scheduled`, from stage 5).
+- Oracle check running alongside multi-million event replays: `-model checked` and
+  `make oracle`.
+
+Measured 2026-11-09 on the development laptop (Intel MacBook), reading the 10M-event
+file from `make data` (seed 42, 2,000 symbols, 100 ETFs of 50 holdings) with
+`-writer none`. Single runs.
+
+`make oracle`: 0 mismatches at batch sizes 1, 100 and 1000, over 24.6M, 9.2M and 1.0M
+ETF checks.
+
+| Model | Batch | Events/s | p50 | p99 | NAV updates |
+|-------|-------|----------|-----|-----|-------------|
+| full | 1 | 102,900 | 8 µs | 31 µs | 24,570,397 |
+| full | 100 | 105,700 | 867 µs | 1.70 ms | 24,570,397 |
+| full | 1000 | 99,400 | 9.27 ms | 15.9 ms | 24,570,397 |
+| incremental | 1 | 190,000 | 4 µs | 17 µs | 24,570,397 |
+| incremental | 100 | 258,900 | 282 µs | 1.10 ms | 9,167,591 |
+| incremental | 1000 | 418,100 | 1.66 ms | 4.21 ms | 999,807 |
+| checked | 1 | 37,900 | 20 µs | 99 µs | 24,570,397 |
+| checked | 100 | 88,800 | 1.06 ms | 1.68 ms | 9,167,591 |
+| checked | 1000 | 282,800 | 3.07 ms | 4.86 ms | 999,807 |
+
+Latency is per batch, from poll to write. The stage 5 run of `full` at batch 1000 gave
+81,000 events/s; single runs vary, which stage 10's five-run medians will settle.
+
+Node recomputations by the incremental graph. Full recompute evaluates about 1.23
+billion positions and 1.20 billion sums for the same stream (50 and 49 per ETF update):
+
+| Batch | Positions | Sums | NAVs |
+|-------|-----------|------|------|
+| 1 | 24,405,114 | 139,439,790 | 24,370,471 |
+| 100 | 23,823,969 | 101,939,907 | 9,150,469 |
+| 1000 | 19,311,294 | 38,298,483 | 999,907 |
+
+At batch 1 the graph evaluates 50 times fewer positions and 8.6 times fewer sums, but
+runs only 1.85 times faster: per-event costs outside the summation (decoding, lookups,
+Incremental's bookkeeping) dominate and are not yet profiled. Larger batches share the
+upper levels of each tree and report each ETF once per batch; at 1000 the incremental
+engine runs 4.2 times faster than full recompute. At batch 1 it reports exactly as many
+NAV updates as full recompute, since every tick in this data moves the NAV.
 
 ## 8. Optimized write path and recovery
 

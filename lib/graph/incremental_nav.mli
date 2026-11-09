@@ -33,6 +33,10 @@ val stabilize : t -> unit
 
 val etfs : t -> string list
 
+(** The ETFs whose NAV or premium changed, by bits, in the stabilizations since the last
+    call, sorted. An ETF's first stabilization counts as a change. *)
+val take_changed : t -> string list
+
 (** [nav] and [premium] raise if events were applied since the last [stabilize]. They
     return [None] in the same cases as {!Full_recompute}. *)
 val nav : t -> etf:string -> float option

@@ -29,7 +29,8 @@ end
 
 module Report = struct
   type t =
-    { writer : string
+    { model : string
+    ; writer : string
     ; batch_size : int
     ; events : int
     ; nav_updates : int
@@ -37,6 +38,7 @@ module Report = struct
     ; events_per_second : float
     ; processing_latency : Latency.t option
     ; latency_since_event_ts : Latency.t option
+    ; model_stats : Model.Stats.t
     }
   [@@deriving sexp]
 end
@@ -49,7 +51,8 @@ let run
   ~start_offset
   ~(source : Source.t)
   ~(writer : Writer.t)
-  state
+  ~(model : Model.t)
+  ()
   =
   source.seek start_offset;
   let processing = Queue.create () in
@@ -70,7 +73,7 @@ let run
       | records ->
         let polled = Time_ns.now () in
         if Option.is_none !started then started := Some polled;
-        let changes = List.map records ~f:(Change.compute state) in
+        let changes = model.compute records in
         writer.write changes;
         let written = Time_ns.now () in
         List.iter changes ~f:(fun change ->
@@ -88,7 +91,8 @@ let run
     Option.value_map !started ~default:0. ~f:(fun started ->
       Time_ns.Span.to_sec (Time_ns.diff !finished started))
   in
-  { Report.writer = writer.name
+  { Report.model = model.name
+  ; writer = writer.name
   ; batch_size
   ; events = !events
   ; nav_updates = !nav_updates
@@ -97,5 +101,6 @@ let run
       (if Float.(seconds > 0.) then Float.of_int !events /. seconds else 0.)
   ; processing_latency = Latency.of_ns processing
   ; latency_since_event_ts = (if scheduled then Latency.of_ns since_event_ts else None)
+  ; model_stats = model.stats ()
   }
 ;;

@@ -1,5 +1,4 @@
 open! Core
-open Nav_graph
 open Nav_source
 
 module Latency : sig
@@ -14,7 +13,8 @@ end
 
 module Report : sig
   type t =
-    { writer : string
+    { model : string
+    ; writer : string
     ; batch_size : int
     ; events : int
     ; nav_updates : int
@@ -22,12 +22,13 @@ module Report : sig
     ; events_per_second : float
     ; processing_latency : Latency.t option
     ; latency_since_event_ts : Latency.t option
+    ; model_stats : Model.Stats.t
     }
   [@@deriving sexp]
 end
 
 (** Seeks [source] to [start_offset], then polls batches of up to [batch_size] records,
-    computes each change and hands the batch to [writer]. Stops after [max_events], or
+    computes their changes with [model] and hands them to [writer]. Stops after [max_events], or
     once a poll has returned nothing for [idle_timeout].
 
     Processing latency runs from the poll that returned an event to the write of its
@@ -43,5 +44,6 @@ val run
   -> start_offset:int
   -> source:Source.t
   -> writer:Writer.t
-  -> Full_recompute.t
+  -> model:Model.t
+  -> unit
   -> Report.t

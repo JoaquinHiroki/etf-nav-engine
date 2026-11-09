@@ -42,6 +42,7 @@ type 'w state =
   ; etf_prices : (string, (float option, 'w) Var.t) Hashtbl.t
   ; etfs : (string, 'w etf) Hashtbl.t
   ; counters : counters
+  ; changed : String.Hash_set.t
   ; mutable stale : bool
   }
 
@@ -66,6 +67,7 @@ let create () =
     ; etf_prices = Hashtbl.create (module String)
     ; etfs = Hashtbl.create (module String)
     ; counters = { positions = 0; sums = 0; navs = 0; premiums = 0; subgraphs = 0 }
+    ; changed = String.Hash_set.create ()
     ; stale = false
     }
 ;;
@@ -129,14 +131,17 @@ let add_etf s (composition : Composition.t) =
   let composition_var = Var.create s.incr composition in
   let nav = nav_node s composition_var in
   let premium = premium_node s nav (etf_price_var s composition.etf) in
+  let observe node =
+    let observer = Incremental.observe ~should_finalize:false node in
+    (* Runs once after any stabilization in which the node's value changed. *)
+    Observer.on_update_exn observer ~f:(fun (_ : _ Observer.Update.t) ->
+      Hash_set.add s.changed composition.etf);
+    observer
+  in
   Hashtbl.add_exn
     s.etfs
     ~key:composition.etf
-    ~data:
-      { composition = composition_var
-      ; nav = Incremental.observe ~should_finalize:false nav
-      ; premium = Incremental.observe ~should_finalize:false premium
-      }
+    ~data:{ composition = composition_var; nav = observe nav; premium = observe premium }
 ;;
 
 let set_composition s (composition : Composition.t) =
@@ -165,6 +170,12 @@ let stabilize (T s) =
 ;;
 
 let etfs (T s) = Hashtbl.keys s.etfs |> List.sort ~compare:String.compare
+
+let take_changed (T s) =
+  let changed = Hash_set.to_list s.changed |> List.sort ~compare:String.compare in
+  Hash_set.clear s.changed;
+  changed
+;;
 
 let observed s ~etf ~f =
   if s.stale

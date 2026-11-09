@@ -46,9 +46,12 @@ module Tables = struct
   ;;
 end
 
+(* The full model writes each snapshot with the offset of the event that changed it, so
+   stopping and restarting gives the same tables as an uninterrupted run. *)
 let run_engine store ?max_events () =
-  let state = Full_recompute.create () in
-  let start_offset = Recovery.restore store state ~topic in
+  let model = Model.full () in
+  let restored, start_offset = Recovery.load store ~topic in
+  model.restore restored;
   ignore
     (Engine.run
        ?max_events
@@ -57,7 +60,8 @@ let run_engine store ?max_events () =
        ~start_offset
        ~source:(Source.in_memory events)
        ~writer:(Baseline_writer.create store ~topic)
-       state
+       ~model
+       ()
      : Engine.Report.t)
 ;;
 

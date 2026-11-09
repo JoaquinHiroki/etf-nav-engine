@@ -1,6 +1,6 @@
 # Development
 
-Status: stage 6 of 10. See [roadmap.md](roadmap.md).
+Status: stage 7 of 10. See [roadmap.md](roadmap.md).
 
 ## Requirements
 
@@ -29,6 +29,7 @@ make setup
 | `make data` | Generate `data/generated/synthetic.events` (`EVENTS=10000000` by default) |
 | `make replay` | Publish the generated file to `etf.events.v1` at full speed, or at `RATE=N` events per second |
 | `make engine ARGS="..."` | Run the engine; see the examples below |
+| `make oracle` | Check the incremental engine against full recompute over the generated file at batch sizes 1, 100 and 1000 (`MAX_EVENTS=N` to shorten) |
 | `make fmt` | Format the code |
 
 ## Services
@@ -56,8 +57,14 @@ sent. It busy-waits between events, which keeps one CPU core busy.
 
 ```sh
 make engine ARGS="-writer none -input data/generated/synthetic.events -batch 1000"
-make engine ARGS="-writer baseline -reset -batch 1 -max-events 20000"
+make engine ARGS="-model full -writer none -input data/generated/synthetic.events -batch 1000"
+make engine ARGS="-model full -writer baseline -reset -batch 1 -max-events 20000"
 ```
+
+`-model` chooses the computation ([ADR 0005](adr/0005-batched-engine.md)): `incremental`
+(the default) stabilizes the graph once per batch, `full` recomputes every affected ETF
+after each event as in stage 5, and `checked` runs both and compares them after every
+batch, exiting with status 1 on any mismatch.
 
 `-writer none` measures computation only. `-writer baseline` persists every event through
 the baseline write path. Without `-input` the engine reads `etf.events.v1`. `-reset`
@@ -65,8 +72,8 @@ truncates the tables and starts from offset 0; without it the engine restores st
 Postgres and continues from the stored offset. Add `-scheduled` when the topic was filled
 with `make replay RATE=N` to report latency since each event's scheduled send time.
 
-The engine prints a report with throughput, latency percentiles and database reads,
-writes and transactions.
+The engine prints a report with throughput, latency percentiles, node recompute counts,
+oracle checks and database reads, writes and transactions.
 
 ## Layout
 

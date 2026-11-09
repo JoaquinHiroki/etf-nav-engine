@@ -1,6 +1,7 @@
 open! Core
-open Nav_graph
+open Nav_domain
 open Nav_store
 
-(** Loads compositions and prices into [state] and returns the next offset to read. *)
-val restore : Store.t -> Full_recompute.t -> topic:string -> int
+(** The events that rebuild the stored compositions and prices, and the next offset to
+    read. *)
+val load : Store.t -> topic:string -> Event.t list * int

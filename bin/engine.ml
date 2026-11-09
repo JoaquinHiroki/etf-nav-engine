@@ -2,13 +2,26 @@ open! Core
 open Nav_config
 open Nav_data
 open Nav_engine
-open Nav_graph
 open Nav_kafka
 open Nav_store
 
-let run ~writer_name ~input ~topic ~batch_size ~max_events ~idle_seconds ~reset ~scheduled
+let run
+  ~model_name
+  ~writer_name
+  ~input
+  ~topic
+  ~batch_size
+  ~max_events
+  ~idle_seconds
+  ~reset
+  ~scheduled
   =
-  let state = Full_recompute.create () in
+  let model =
+    match model_name with
+    | `Full -> Model.full ()
+    | `Incremental -> Model.incremental ()
+    | `Checked -> Model.checked ()
+  in
   let offset_key =
     Option.value_map input ~default:topic ~f:(fun path -> "file:" ^ path)
   in
@@ -22,7 +35,8 @@ let run ~writer_name ~input ~topic ~batch_size ~max_events ~idle_seconds ~reset 
     | None -> 0
     | Some store ->
       if reset then Store.truncate_all store;
-      let offset = Recovery.restore store state ~topic:offset_key in
+      let events, offset = Recovery.load store ~topic:offset_key in
+      model.restore events;
       Store.reset_stats store;
       offset
   in
@@ -45,19 +59,36 @@ let run ~writer_name ~input ~topic ~batch_size ~max_events ~idle_seconds ~reset 
       ~start_offset
       ~source
       ~writer
-      state
+      ~model
+      ()
   in
   source.close ();
   let db = Option.map store ~f:Store.stats in
   Option.iter store ~f:Store.close;
   print_s
-    [%message (start_offset : int) (report : Engine.Report.t) (db : Store.Stats.t option)]
+    [%message (start_offset : int) (report : Engine.Report.t) (db : Store.Stats.t option)];
+  match report.model_stats.oracle with
+  | Some { Model.Oracle.mismatches; _ } when mismatches > 0 ->
+    eprintf "%d mismatches between incremental and full recompute\n" mismatches;
+    Stdlib.exit 1
+  | _ -> ()
 ;;
 
 let command =
   Command.basic
     ~summary:"Consume events, keep NAVs current and persist them"
-    (let%map_open.Command writer_name =
+    (let%map_open.Command model_name =
+       flag
+         "model"
+         (optional_with_default
+            `Incremental
+            (Arg_type.of_alist_exn
+               [ "full", `Full; "incremental", `Incremental; "checked", `Checked ]))
+         ~doc:
+           "MODEL full (recompute every affected ETF per event), incremental (default, \
+            one stabilization per batch) or checked (incremental compared with full \
+            after every batch)"
+     and writer_name =
        flag
          "writer"
          (optional_with_default
@@ -86,6 +117,7 @@ let command =
      in
      fun () ->
        run
+         ~model_name
          ~writer_name
          ~input
          ~topic

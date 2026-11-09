@@ -26,3 +26,8 @@ jobs:
       - run: opam exec -- dune exec bin/generate.exe -- -output synthetic.events -events 100000
       - run: opam exec -- dune exec bin/replay.exe -- -input synthetic.events -topic etf.events.test
       - run: opam exec -- dune exec bin/engine.exe -- -writer none -input synthetic.events -idle-seconds 1
+      - run: |
+          for batch in 1 100 1000; do
+            opam exec -- dune exec bin/engine.exe -- -writer none -model checked \
+              -input synthetic.events -batch $batch -idle-seconds 0
+          done

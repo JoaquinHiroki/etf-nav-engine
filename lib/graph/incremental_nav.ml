@@ -41,6 +41,7 @@ type 'w state =
   ; prices : (string, (float, 'w) Var.t) Hashtbl.t
   ; etf_prices : (string, (float option, 'w) Var.t) Hashtbl.t
   ; etfs : (string, 'w etf) Hashtbl.t
+  ; holders : (string, String.Hash_set.t) Hashtbl.t
   ; counters : counters
   ; changed : String.Hash_set.t
   ; mutable stale : bool
@@ -66,6 +67,7 @@ let create () =
     ; prices = Hashtbl.create (module String)
     ; etf_prices = Hashtbl.create (module String)
     ; etfs = Hashtbl.create (module String)
+    ; holders = Hashtbl.create (module String)
     ; counters = { positions = 0; sums = 0; navs = 0; premiums = 0; subgraphs = 0 }
     ; changed = String.Hash_set.create ()
     ; stale = false
@@ -144,23 +146,50 @@ let add_etf s (composition : Composition.t) =
     ~data:{ composition = composition_var; nav = observe nav; premium = observe premium }
 ;;
 
+let holders_of s symbol =
+  Hashtbl.find_or_add s.holders symbol ~default:String.Hash_set.create
+;;
+
+(* Same bookkeeping as [Full_recompute.set_composition], so both report the same
+   affected ETFs. *)
+let set_holders s ~old (composition : Composition.t) =
+  Option.iter old ~f:(fun (old : Composition.t) ->
+    Array.iter old.holdings ~f:(fun h -> Hash_set.remove (holders_of s h.symbol) old.etf));
+  Array.iter composition.holdings ~f:(fun h ->
+    Hash_set.add (holders_of s h.symbol) composition.etf)
+;;
+
+(* Returns whether the composition was applied. *)
 let set_composition s (composition : Composition.t) =
   (* Variables are created here, outside stabilization, so the bind only looks them up. *)
   Array.iter composition.holdings ~f:(fun h ->
     ignore (price_var s h.symbol : (_, _) Var.t));
   match Hashtbl.find s.etfs composition.etf with
-  | None -> add_etf s composition
+  | None ->
+    set_holders s ~old:None composition;
+    add_etf s composition;
+    true
   | Some etf ->
-    if composition.version > (Var.value etf.composition).version
-    then Var.set etf.composition composition
+    let current = Var.value etf.composition in
+    if composition.version > current.version
+    then (
+      set_holders s ~old:(Some current) composition;
+      Var.set etf.composition composition;
+      true)
+    else false
 ;;
 
-let apply (T s) (event : Event.t) =
+let apply ?(affected = ignore) (T s) (event : Event.t) =
   s.stale <- true;
   match event with
-  | Price { symbol; price; ts = _ } -> Var.set (price_var s symbol) price
-  | Etf_price { etf; price; ts = _ } -> Var.set (etf_price_var s etf) (Some price)
-  | Composition { composition; ts = _ } -> set_composition s composition
+  | Price { symbol; price; ts = _ } ->
+    Var.set (price_var s symbol) price;
+    Option.iter (Hashtbl.find s.holders symbol) ~f:(Hash_set.iter ~f:affected)
+  | Etf_price { etf; price; ts = _ } ->
+    Var.set (etf_price_var s etf) (Some price);
+    affected etf
+  | Composition { composition; ts = _ } ->
+    if set_composition s composition then affected composition.etf
   | Rebalance _ -> ()
 ;;
 

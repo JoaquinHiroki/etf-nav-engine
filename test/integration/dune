@@ -1,7 +1,10 @@
 (executables
- (names round_trip baseline)
+ (names round_trip baseline crash)
  (libraries
   core
+  core_unix
+  core_unix.filename_unix
+  core_unix.signal_unix
   nav_config
   nav_data
   nav_domain
@@ -19,4 +22,5 @@
  (action
   (progn
    (run %{exe:round_trip.exe})
-   (run %{exe:baseline.exe}))))
+   (run %{exe:baseline.exe})
+   (run %{exe:crash.exe} %{dep:../../bin/engine.exe}))))

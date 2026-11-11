@@ -20,6 +20,7 @@ module Oracle = struct
     { batches : int
     ; etf_checks : int
     ; mismatches : int
+    ; affected_mismatches : int
     ; first_mismatches : Mismatch.t list
     }
   [@@deriving sexp]
@@ -50,18 +51,32 @@ let full () =
   }
 ;;
 
-(* Applies [records], stabilizes and returns the ETFs that changed. *)
+(* Applies [records] and stabilizes. Returns, for each ETF the batch affected, the
+   offset and timestamp of the last event that affected it, and the ETFs whose values
+   changed. *)
 let step graph (records : Source.record list) =
-  List.iter records ~f:(fun record -> Incremental_nav.apply graph record.event);
+  let last_affected = Hashtbl.create (module String) in
+  List.iter records ~f:(fun { Source.offset; event } ->
+    let ts = Event.ts event in
+    Incremental_nav.apply graph event ~affected:(fun etf ->
+      Hashtbl.set last_affected ~key:etf ~data:(offset, ts)));
   Incremental_nav.stabilize graph;
-  Incremental_nav.take_changed graph
+  last_affected, Incremental_nav.take_changed graph
 ;;
 
-let changes graph (records : Source.record list) ~changed =
+(* The batch's NAV updates all go on its last change, with the offsets of the events that
+   affected each ETF, so the stored snapshots do not depend on where batches start. *)
+let changes graph (records : Source.record list) ~last_affected =
   let navs =
-    List.filter_map changed ~f:(fun etf ->
-      let%map.Option nav = Incremental_nav.nav graph ~etf in
-      { Change.Nav_update.etf; nav; premium = Incremental_nav.premium graph ~etf })
+    Hashtbl.to_alist last_affected
+    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+    |> List.map ~f:(fun (etf, (source_offset, ts)) ->
+      { Change.Nav_update.etf
+      ; nav = Incremental_nav.nav graph ~etf
+      ; premium = Incremental_nav.premium graph ~etf
+      ; source_offset
+      ; ts
+      })
   in
   let last = List.length records - 1 in
   List.mapi records ~f:(fun i { Source.offset; event } ->
@@ -79,7 +94,10 @@ let incremental () =
   let graph = Incremental_nav.create () in
   { name = "incremental"
   ; restore = restore_incremental graph
-  ; compute = (fun records -> changes graph records ~changed:(step graph records))
+  ; compute =
+      (fun records ->
+        let last_affected, (_ : string list) = step graph records in
+        changes graph records ~last_affected)
   ; stats =
       (fun () ->
         { Stats.recomputes = Some (Incremental_nav.recomputes graph); oracle = None })
@@ -95,6 +113,7 @@ let checked () =
   let batches = ref 0 in
   let etf_checks = ref 0 in
   let mismatches = ref 0 in
+  let affected_mismatches = ref 0 in
   let first_mismatches = Queue.create () in
   let check ~offset etf =
     incr etf_checks;
@@ -120,15 +139,21 @@ let checked () =
       then Queue.enqueue first_mismatches mismatch)
   in
   let compute (records : Source.record list) =
-    let affected = String.Hash_set.create () in
-    List.iter records ~f:(fun record ->
-      List.iter (Full_recompute.apply full record.event) ~f:(Hash_set.add affected));
-    let changed = step graph records in
-    List.iter changed ~f:(Hash_set.add affected);
+    let full_affected = Hashtbl.create (module String) in
+    List.iter records ~f:(fun { Source.offset; event } ->
+      List.iter (Full_recompute.apply full event) ~f:(fun etf ->
+        Hashtbl.set full_affected ~key:etf ~data:offset));
+    let last_affected, changed = step graph records in
+    let graph_affected = Hashtbl.map last_affected ~f:fst in
+    if not (Hashtbl.equal Int.equal full_affected graph_affected)
+    then incr affected_mismatches;
+    let to_check = String.Hash_set.of_list (Hashtbl.keys full_affected) in
+    List.iter (Hashtbl.keys graph_affected) ~f:(Hash_set.add to_check);
+    List.iter changed ~f:(Hash_set.add to_check);
     Option.iter (List.last records) ~f:(fun last ->
       incr batches;
-      Hash_set.iter affected ~f:(check ~offset:last.offset));
-    changes graph records ~changed
+      Hash_set.iter to_check ~f:(check ~offset:last.offset));
+    changes graph records ~last_affected
   in
   { name = "checked"
   ; restore =
@@ -145,6 +170,7 @@ let checked () =
               { Oracle.batches = !batches
               ; etf_checks = !etf_checks
               ; mismatches = !mismatches
+              ; affected_mismatches = !affected_mismatches
               ; first_mismatches = Queue.to_list first_mismatches
               }
         })

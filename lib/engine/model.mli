@@ -20,6 +20,9 @@ module Oracle : sig
     { batches : int
     ; etf_checks : int
     ; mismatches : int
+    ; affected_mismatches : int
+    (** batches in which the graph and [Full_recompute] disagree on which ETFs
+        were affected, or on the offset of the last event affecting one *)
     ; first_mismatches : Mismatch.t list (** at most 10 *)
     }
   [@@deriving sexp]
@@ -43,11 +46,12 @@ type t =
   }
 
 (** Recomputes every affected ETF from all its holdings after each event, and reports
-    each affected ETF with a NAV on that event's change. *)
+    each affected ETF on that event's change. *)
 val full : unit -> t
 
-(** Applies the whole batch to the incremental graph and stabilizes once. ETFs whose NAV
-    or premium changed are reported on the batch's last change. *)
+(** Applies the whole batch to the incremental graph and stabilizes once. Every ETF the
+    batch affected is reported on the batch's last change, with its final values and the
+    offset and timestamp of the last event that affected it. *)
 val incremental : unit -> t
 
 (** [incremental], with [Full_recompute] applied alongside. After each batch, every ETF

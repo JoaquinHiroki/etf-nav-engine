@@ -141,9 +141,44 @@ NAV updates as full recompute, since every tick in this data moves the NAV.
 
 ## 8. Optimized write path and recovery
 
+- Snapshots hold the values after the last event that affected each ETF, with its
+  offset, so tables do not depend on batching ([ADR 0006](adr/0006-write-path-and-recovery.md)).
 - State held in memory, multi-row upserts, one transaction per batch.
 - `next_offset` committed with state; advisory lock at startup.
 - Recovery: load state, rebuild graph, seek, replay. Kill-and-restart test harness.
+
+Measured 2026-11-11 on the development laptop (Intel MacBook, Postgres 16.4 in Docker
+Desktop, default settings, `synchronous_commit` on). Single runs.
+
+`make integration`: on 3,000 events, restarted baseline runs, optimized runs at batch
+sizes 1, 50 and 1000, and a run that switches writer and batch size twice all give the
+baseline's tables. The crash test killed the engine 3 times on 200,000 events
+(`CRASH_SEED=84000`, at `next_offset` 16,200, 101,448 and 187,362) and the final tables
+equal the uninterrupted run.
+
+`make oracle`: 0 mismatches and 0 batches with different affected ETFs at batch sizes
+1, 100 and 1000, over 24.6M, 9.2M and 1.0M ETF checks. Recompute counts equal stage 7's.
+Throughput was 20,500, 54,100 and 138,900 events/s, about half of stage 7's runs; these
+ran with Redpanda and Postgres up, and the model now tracks the last affecting offset per
+ETF. The two have not been separated.
+
+Writers, reading the 10M-event file from `make data` with the incremental model.
+Statements count each multi-row upsert once:
+
+| Writer | Batch | Events | Events/s | p50 | p99 | Reads/event | Writes/event | Transactions |
+|--------|-------|--------|----------|-----|-----|-------------|--------------|--------------|
+| baseline | 1 | 20k | 60 | 12.3 ms | 70.4 ms | 8.91 | 4.45 | 20,000 |
+| baseline | 100 | 20k | 64 | 1.46 s | 4.81 s | 5.83 | 2.92 | 20,000 |
+| optimized | 1 | 20k | 109 | 7.6 ms | 40.2 ms | 0 | 2.92 | 20,000 |
+| optimized | 100 | 1M | 3,340 | 21.3 ms | 183 ms | 0 | 0.039 | 10,000 |
+| optimized | 1000 | 10M | 32,000 | 24.3 ms | 117 ms | 0 | 0.0041 | 10,000 |
+
+The baseline stays near 60 events/s at any batch size, because it still commits once per
+event. Without reads, the optimized writer at batch 1 is 1.8 times faster. Above that,
+a transaction costs about 30 ms whether it holds 100 events or 1000, so throughput grows
+with batch size: at 1000 it writes 530 times faster than the baseline at batch 1. Postgres
+now limits the service: the same computation runs at 418,100 events/s with `-writer none`
+(stage 7).
 
 ## 9. Rebalance state machine
 

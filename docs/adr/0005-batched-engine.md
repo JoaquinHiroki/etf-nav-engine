@@ -1,7 +1,8 @@
 # 0005: Batched engine and checked replays
 
 Date: 2026-11-09
-Status: accepted
+Status: accepted; which ETFs are reported, and with which offsets, is superseded by
+[0006](0006-write-path-and-recovery.md)
 
 ## Context
 

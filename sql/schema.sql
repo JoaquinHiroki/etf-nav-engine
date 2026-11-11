@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS composition (
 
 CREATE TABLE IF NOT EXISTS nav_snapshot (
   etf text PRIMARY KEY,
-  nav double precision NOT NULL,
+  -- NULL while some holding has no price (ADR 0006).
+  nav double precision,
   premium double precision,
   source_offset bigint NOT NULL,
   ts timestamptz NOT NULL
@@ -46,3 +47,6 @@ CREATE TABLE IF NOT EXISTS etf_price (
   source_offset bigint NOT NULL,
   ts timestamptz NOT NULL
 );
+
+-- Databases created before ADR 0006.
+ALTER TABLE nav_snapshot ALTER COLUMN nav DROP NOT NULL;

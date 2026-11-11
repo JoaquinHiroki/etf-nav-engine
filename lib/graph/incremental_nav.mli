@@ -25,8 +25,11 @@ end
 val create : unit -> t
 
 (** Records [event] without recomputing anything. Compositions only replace a lower
-    version, as in {!Full_recompute}. Rebalance events are not applied yet. *)
-val apply : t -> Event.t -> unit
+    version, as in {!Full_recompute}. Rebalance events are not applied yet.
+
+    [affected] is called once for each ETF that {!Full_recompute.apply} would return for
+    the same event, in no particular order. *)
+val apply : ?affected:(string -> unit) -> t -> Event.t -> unit
 
 (** Recomputes the nodes affected by the events applied since the last call. *)
 val stabilize : t -> unit

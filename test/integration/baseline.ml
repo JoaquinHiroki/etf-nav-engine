@@ -1,7 +1,6 @@
 open! Core
 open Nav_config
 open Nav_data
-open Nav_domain
 open Nav_engine
 open Nav_graph
 open Nav_source
@@ -26,40 +25,23 @@ let events =
   Queue.to_array events
 ;;
 
-module Tables = struct
-  type t =
-    { snapshots : Store.Snapshot.t list
-    ; prices : Store.Price.t list
-    ; etf_prices : Store.Price.t list
-    ; compositions : (Composition.t * Timestamp.t) list
-    ; next_offset : int option
-    }
-  [@@deriving compare, sexp]
+(* The stage 5 service: full recompute and the baseline writer. *)
+let baseline = Model.full, Baseline_writer.create
+let optimized = Model.incremental, Optimized_writer.create
 
-  let read store =
-    { snapshots = Store.snapshots store
-    ; prices = Store.prices store Holding_prices
-    ; etf_prices = Store.prices store Etf_prices
-    ; compositions = Store.latest_compositions store
-    ; next_offset = Store.next_offset store ~topic
-    }
-  ;;
-end
-
-(* The full model writes each snapshot with the offset of the event that changed it, so
-   stopping and restarting gives the same tables as an uninterrupted run. *)
-let run_engine store ?max_events () =
-  let model = Model.full () in
+(* Restores from [store], then runs until [max_events] or the end of [events]. *)
+let run_engine store (model, writer) ~batch_size ?max_events () =
+  let model : Model.t = model () in
   let restored, start_offset = Recovery.load store ~topic in
   model.restore restored;
   ignore
     (Engine.run
        ?max_events
        ~idle_timeout:Time_ns.Span.zero
-       ~batch_size:50
+       ~batch_size
        ~start_offset
        ~source:(Source.in_memory events)
-       ~writer:(Baseline_writer.create store ~topic)
+       ~writer:(writer store ~topic)
        ~model
        ()
      : Engine.Report.t)
@@ -68,31 +50,60 @@ let run_engine store ?max_events () =
 let check_against_oracle (tables : Tables.t) =
   let oracle = Full_recompute.of_events (Array.to_list events) in
   let expected =
-    List.filter_map (Full_recompute.etfs oracle) ~f:(fun etf ->
-      let%map.Option nav = Full_recompute.nav oracle ~etf in
-      etf, nav, Full_recompute.premium oracle ~etf)
+    List.map (Full_recompute.etfs oracle) ~f:(fun etf ->
+      etf, Full_recompute.nav oracle ~etf, Full_recompute.premium oracle ~etf)
   in
   let actual = List.map tables.snapshots ~f:(fun s -> s.etf, s.nav, s.premium) in
-  [%test_result: (string * float * float option) list] actual ~expect:expected;
+  [%test_result: (string * float option * float option) list] actual ~expect:expected;
   [%test_result: int option] tables.next_offset ~expect:(Some (Array.length events))
+;;
+
+(* Truncates, runs [f] and returns the tables and the statements per event. *)
+let fresh store ~f =
+  Store.truncate_all store;
+  Store.reset_stats store;
+  f ();
+  let { Store.Stats.reads; writes; transactions } = Store.stats store in
+  let per_event n = Float.of_int n /. Float.of_int (Array.length events) in
+  ( Tables.read store ~topic
+  , sprintf
+      "%.2f reads, %.2f writes, %.3f transactions per event"
+      (per_event reads)
+      (per_event writes)
+      (per_event transactions) )
 ;;
 
 let () =
   let store = Store.connect (Config.postgres_test ()) in
-  Store.truncate_all store;
-  Store.reset_stats store;
-  run_engine store ();
-  let stats = Store.stats store in
-  let uninterrupted = Tables.read store in
-  check_against_oracle uninterrupted;
-  Store.truncate_all store;
-  run_engine store ~max_events:1_234 ();
-  run_engine store ();
-  [%test_result: Tables.t] (Tables.read store) ~expect:uninterrupted;
+  let reference, baseline_cost =
+    fresh store ~f:(fun () -> run_engine store baseline ~batch_size:50 ())
+  in
+  check_against_oracle reference;
+  printf "baseline, batch 50: %s\n" baseline_cost;
+  let restarted, _ =
+    fresh store ~f:(fun () ->
+      run_engine store baseline ~batch_size:50 ~max_events:1_234 ();
+      run_engine store baseline ~batch_size:50 ())
+  in
+  Tables.check ~expect:reference restarted;
+  List.iter [ 1; 50; 1000 ] ~f:(fun batch_size ->
+    let tables, cost =
+      fresh store ~f:(fun () -> run_engine store optimized ~batch_size ())
+    in
+    Tables.check ~expect:reference tables;
+    printf "optimized, batch %d: %s\n" batch_size cost);
+  (* Restarting with another batch size, or another writer, changes nothing. *)
+  let mixed, _ =
+    fresh store ~f:(fun () ->
+      run_engine store optimized ~batch_size:50 ~max_events:1_234 ();
+      run_engine store baseline ~batch_size:7 ~max_events:500 ();
+      run_engine store optimized ~batch_size:1000 ())
+  in
+  Tables.check ~expect:reference mixed;
   Store.close store;
   printf
-    "baseline ok: %d events, %d snapshots, %.2f reads per write\n"
+    "baseline ok: %d events, %d snapshots; restarted, optimized and mixed runs give \
+     equal tables\n"
     (Array.length events)
-    (List.length uninterrupted.snapshots)
-    (Float.of_int stats.reads /. Float.of_int stats.writes)
+    (List.length reference.snapshots)
 ;;

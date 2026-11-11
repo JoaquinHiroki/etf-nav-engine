@@ -1,6 +1,6 @@
 # Development
 
-Status: stage 7 of 10. See [roadmap.md](roadmap.md).
+Status: stage 8 of 10. See [roadmap.md](roadmap.md).
 
 ## Requirements
 
@@ -24,7 +24,7 @@ make setup
 | `make build` | Build everything |
 | `make test` | Run unit and property tests |
 | `make up` / `make down` | Start or stop Redpanda and Postgres, create topics and apply the schema |
-| `make integration` | Publish an event, consume it and persist it through Postgres |
+| `make integration` | Kafka round trip; baseline and optimized writers give equal tables; kill-and-restart test |
 | `make check` | Connect to both services from OCaml |
 | `make data` | Generate `data/generated/synthetic.events` (`EVENTS=10000000` by default) |
 | `make replay` | Publish the generated file to `etf.events.v1` at full speed, or at `RATE=N` events per second |
@@ -59,6 +59,7 @@ sent. It busy-waits between events, which keeps one CPU core busy.
 make engine ARGS="-writer none -input data/generated/synthetic.events -batch 1000"
 make engine ARGS="-model full -writer none -input data/generated/synthetic.events -batch 1000"
 make engine ARGS="-model full -writer baseline -reset -batch 1 -max-events 20000"
+make engine ARGS="-reset -batch 1000"
 ```
 
 `-model` chooses the computation ([ADR 0005](adr/0005-batched-engine.md)): `incremental`
@@ -66,8 +67,11 @@ make engine ARGS="-model full -writer baseline -reset -batch 1 -max-events 20000
 after each event as in stage 5, and `checked` runs both and compares them after every
 batch, exiting with status 1 on any mismatch.
 
-`-writer none` measures computation only. `-writer baseline` persists every event through
-the baseline write path. Without `-input` the engine reads `etf.events.v1`. `-reset`
+`-writer none` measures computation only. `-writer optimized` (the default) writes one
+transaction per batch without reads ([ADR 0006](adr/0006-write-path-and-recovery.md)), and
+`-writer baseline` writes one transaction per event, reading before every write. Both
+give the same tables. Only one engine at a time can consume a topic or file: a second
+one exits with status 2. Without `-input` the engine reads `etf.events.v1`. `-reset`
 truncates the tables and starts from offset 0; without it the engine restores state from
 Postgres and continues from the stored offset. Add `-scheduled` when the topic was filled
 with `make replay RATE=N` to report latency since each event's scheduled send time.

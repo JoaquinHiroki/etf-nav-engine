@@ -29,12 +29,20 @@ let events =
   |]
 ;;
 
+(* Prints each change's offset and its updates as (etf nav premium source_offset). *)
 let print_changes model =
   let writer =
     { Writer.name = "print"
     ; write =
         List.iter ~f:(fun (change : Change.t) ->
-          print_s [%sexp (change.offset : int), (change.navs : Change.Nav_update.t list)])
+          let navs =
+            List.map change.navs ~f:(fun (u : Change.Nav_update.t) ->
+              u.etf, u.nav, u.premium, u.source_offset)
+          in
+          print_s
+            [%sexp
+              (change.offset : int)
+              , (navs : (string * float option * float option * int) list)])
     }
   in
   let report =
@@ -50,33 +58,32 @@ let print_changes model =
   print_s [%message (report.events : int) (report.nav_updates : int)]
 ;;
 
-let%expect_test "full: each change carries the navs of the etfs the event affects" =
+let%expect_test "full: each change carries the etfs its event affects" =
   print_changes (Model.full ());
   [%expect
     {|
-    (0 ())
-    (1 ())
-    (2 ())
-    (3 (((etf A) (nav 30) (premium ())) ((etf B) (nav 40) (premium ()))))
+    (0 ((A () () 0)))
+    (1 ((B () () 1)))
+    (2 ((A () () 2)))
+    (3 ((A (30) () 3) (B (40) () 3)))
     (4 ())
-    (5 (((etf B) (nav 40) (premium (0.025)))))
-    (6 (((etf A) (nav 31) (premium ()))))
-    ((report.events 7) (report.nav_updates 4)) |}]
+    (5 ((B (40) (0.025) 5)))
+    (6 ((A (31) () 6)))
+    ((report.events 7) (report.nav_updates 7)) |}]
 ;;
 
-let%expect_test "incremental: the last change of each batch carries the etfs that changed"
-  =
+let%expect_test "incremental: a batch's last change carries every etf it affected" =
   print_changes (Model.incremental ());
   [%expect
     {|
     (0 ())
     (1 ())
-    (2 ())
+    (2 ((A () () 2) (B () () 1)))
     (3 ())
     (4 ())
-    (5 (((etf A) (nav 30) (premium ())) ((etf B) (nav 40) (premium (0.025)))))
-    (6 (((etf A) (nav 31) (premium ()))))
-    ((report.events 7) (report.nav_updates 3)) |}]
+    (5 ((A (30) () 3) (B (40) (0.025) 5)))
+    (6 ((A (31) () 6)))
+    ((report.events 7) (report.nav_updates 5)) |}]
 ;;
 
 let%expect_test "checked: no mismatches at any batch size" =
@@ -108,9 +115,11 @@ let%expect_test "checked: no mismatches at any batch size" =
     let oracle = Option.value_exn report.model_stats.oracle in
     let recomputes = Option.value_exn report.model_stats.recomputes in
     printf
-      "batch %4d: mismatches %d, etf checks %d, nav updates %d, positions %d, sums %d\n"
+      "batch %4d: mismatches %d, affected mismatches %d, etf checks %d, nav updates %d, \
+       positions %d, sums %d\n"
       batch_size
       oracle.mismatches
+      oracle.affected_mismatches
       oracle.etf_checks
       report.nav_updates
       recomputes.positions
@@ -118,7 +127,7 @@ let%expect_test "checked: no mismatches at any batch size" =
     List.iter oracle.first_mismatches ~f:(fun m -> print_s [%sexp (m : Model.Mismatch.t)]));
   [%expect
     {|
-    batch    1: mismatches 0, etf checks 142197, nav updates 141597, positions 144545, sums 618695
-    batch  100: mismatches 0, etf checks 29737, nav updates 29625, positions 128388, sums 317981
-    batch 1000: mismatches 0, etf checks 3000, nav updates 3000, positions 54578, sums 56788 |}]
+    batch    1: mismatches 0, affected mismatches 0, etf checks 142197, nav updates 142197, positions 144545, sums 618695
+    batch  100: mismatches 0, affected mismatches 0, etf checks 29737, nav updates 29737, positions 128388, sums 317981
+    batch 1000: mismatches 0, affected mismatches 0, etf checks 3000, nav updates 3000, positions 54578, sums 56788 |}]
 ;;

@@ -40,27 +40,18 @@ let write_event store ~offset (event : Event.t) =
   | Rebalance _ -> ()
 ;;
 
-let write_snapshot store ~offset ~ts (update : Change.Nav_update.t) =
+let write_snapshot store (update : Change.Nav_update.t) =
   write_versioned
     ~what:update.etf
-    ~version:offset
+    ~version:update.source_offset
     ~read:(fun () -> Store.snapshot_offset store ~etf:update.etf)
-    ~write:(fun () ->
-      Store.upsert_snapshot
-        store
-        { etf = update.etf
-        ; nav = update.nav
-        ; premium = update.premium
-        ; source_offset = offset
-        ; ts
-        })
+    ~write:(fun () -> Store.upsert_snapshot store (Change.Nav_update.to_snapshot update))
 ;;
 
 let write_change store ~topic (change : Change.t) =
-  let ts = Event.ts change.event in
   Store.transaction store ~f:(fun () ->
     write_event store ~offset:change.offset change.event;
-    List.iter change.navs ~f:(write_snapshot store ~offset:change.offset ~ts);
+    List.iter change.navs ~f:(write_snapshot store);
     write_versioned
       ~what:topic
       ~version:(change.offset + 1)

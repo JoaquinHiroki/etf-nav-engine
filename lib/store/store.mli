@@ -18,7 +18,7 @@ end
 module Snapshot : sig
   type t =
     { etf : string
-    ; nav : float
+    ; nav : float option
     ; premium : float option
     ; source_offset : int
     ; ts : Time_ns.Alternate_sexp.t
@@ -49,13 +49,31 @@ val reset_stats : t -> unit
 val transaction : t -> f:(unit -> 'a) -> 'a
 
 val truncate_all : t -> unit
+
+(** Takes a session-level advisory lock on [key] without waiting. Returns [false] if
+    another session holds it. The lock is released when the connection closes. *)
+val try_advisory_lock : t -> key:string -> bool
+
 val insert_composition : t -> Composition.t -> effective_ts:Time_ns.t -> unit
+
+(** Inserts unless the ETF already has this version or a later one, without a read. *)
+val insert_composition_if_newer : t -> Composition.t -> effective_ts:Time_ns.t -> unit
+
 val composition_version : t -> etf:string -> int option
 val latest_compositions : t -> (Composition.t * Time_ns.t) list
 val upsert_price : t -> price_table -> Price.t -> unit
 val price_offset : t -> price_table -> symbol:string -> int option
 val prices : t -> price_table -> Price.t list
+
+(** One statement for all rows; a row is only replaced by a higher [source_offset].
+    Keys must be distinct. *)
+val upsert_prices : t -> price_table -> Price.t list -> unit
+
 val upsert_snapshot : t -> Snapshot.t -> unit
+
+(** As [upsert_prices], for snapshots. *)
+val upsert_snapshots : t -> Snapshot.t list -> unit
+
 val snapshot_offset : t -> etf:string -> int option
 val snapshots : t -> Snapshot.t list
 val set_next_offset : t -> topic:string -> int -> unit

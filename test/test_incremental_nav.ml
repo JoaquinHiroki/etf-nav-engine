@@ -38,14 +38,21 @@ let check ~etfs ~full ~incr =
       ~full:(Full_recompute.etf_price full ~etf))
 ;;
 
-(* Applies [events] one at a time to both implementations, stabilizing and comparing
-   after each. Returns the full recompute's affected ETFs per event, for counting. *)
+(* Applies [events] one at a time to both implementations, comparing the affected ETFs
+   and, after stabilizing, the values. Passes the full recompute's affected ETFs to [f],
+   for counting. *)
 let run_both ~etfs events ~f =
   let full = Full_recompute.create () in
   let incr = Incremental_nav.create () in
   List.iter events ~f:(fun event ->
     let affected = Full_recompute.apply full event in
-    Incremental_nav.apply incr event;
+    let graph_affected = ref [] in
+    Incremental_nav.apply incr event ~affected:(fun etf ->
+      graph_affected := etf :: !graph_affected);
+    [%test_result: string list]
+      ~message:"affected etfs"
+      (List.sort !graph_affected ~compare:String.compare)
+      ~expect:affected;
     Incremental_nav.stabilize incr;
     check ~etfs:(etfs full) ~full ~incr;
     f full affected);

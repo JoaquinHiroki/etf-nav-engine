@@ -28,12 +28,16 @@ let run
   let store =
     match writer_name with
     | `None -> None
-    | `Baseline -> Some (Store.connect (Config.postgres ()))
+    | `Baseline | `Optimized -> Some (Store.connect (Config.postgres ()))
   in
   let start_offset =
     match store with
     | None -> 0
     | Some store ->
+      if not (Store.try_advisory_lock store ~key:offset_key)
+      then (
+        eprintf "another engine is already consuming %s\n" offset_key;
+        Stdlib.exit 2);
       if reset then Store.truncate_all store;
       let events, offset = Recovery.load store ~topic:offset_key in
       model.restore events;
@@ -41,9 +45,10 @@ let run
       offset
   in
   let writer =
-    match store with
-    | None -> Writer.none
-    | Some store -> Baseline_writer.create store ~topic:offset_key
+    match writer_name, store with
+    | `Baseline, Some store -> Baseline_writer.create store ~topic:offset_key
+    | `Optimized, Some store -> Optimized_writer.create store ~topic:offset_key
+    | _, _ -> Writer.none
   in
   let source =
     match input with
@@ -68,8 +73,13 @@ let run
   print_s
     [%message (start_offset : int) (report : Engine.Report.t) (db : Store.Stats.t option)];
   match report.model_stats.oracle with
-  | Some { Model.Oracle.mismatches; _ } when mismatches > 0 ->
-    eprintf "%d mismatches between incremental and full recompute\n" mismatches;
+  | Some { Model.Oracle.mismatches; affected_mismatches; _ }
+    when mismatches > 0 || affected_mismatches > 0 ->
+    eprintf
+      "%d mismatches and %d batches with different affected ETFs between incremental and \
+       full recompute\n"
+      mismatches
+      affected_mismatches;
     Stdlib.exit 1
   | _ -> ()
 ;;
@@ -92,9 +102,12 @@ let command =
        flag
          "writer"
          (optional_with_default
-            `Baseline
-            (Arg_type.of_alist_exn [ "none", `None; "baseline", `Baseline ]))
-         ~doc:"WRITER none (engine only) or baseline (default)"
+            `Optimized
+            (Arg_type.of_alist_exn
+               [ "none", `None; "baseline", `Baseline; "optimized", `Optimized ]))
+         ~doc:
+           "WRITER none (engine only), baseline (one transaction per event, reads before \
+            writes) or optimized (default, one transaction per batch)"
      and input =
        flag "input" (optional string) ~doc:"FILE read an event file instead of Kafka"
      and topic =

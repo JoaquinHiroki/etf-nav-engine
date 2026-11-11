@@ -13,7 +13,7 @@ end
 module Snapshot = struct
   type t =
     { etf : string
-    ; nav : float
+    ; nav : float option
     ; premium : float option
     ; source_offset : int
     ; ts : Time_ns.Alternate_sexp.t
@@ -104,6 +104,13 @@ let truncate_all t =
      etf_price"
 ;;
 
+let try_advisory_lock t ~key =
+  match query t "SELECT pg_try_advisory_lock(hashtext($1))" ~params:[| key |] with
+  | [ [ Some "t" ] ] -> true
+  | [ [ Some "f" ] ] -> false
+  | rows -> raise_s [%message "unexpected lock result" (rows : string option list list)]
+;;
+
 let float_param x = sprintf "%.17g" x
 let int_param = Int.to_string
 let ts_param ts = Int.to_string (Time_ns.to_int_ns_since_epoch ts / 1_000)
@@ -165,6 +172,26 @@ let insert_composition t (c : Composition.t) ~effective_ts =
       |]
 ;;
 
+let insert_composition_if_newer t (c : Composition.t) ~effective_ts =
+  command
+    t
+    (sprintf
+       {|INSERT INTO composition
+           (etf, version, effective_ts, holdings, cash, shares_outstanding)
+         SELECT $1::text, $2::int, %s, $4::jsonb, $5::float8, $6::float8
+         WHERE NOT EXISTS
+           (SELECT 1 FROM composition WHERE etf = $1::text AND version >= $2::int)|}
+       (ts_value 3))
+    ~params:
+      [| c.etf
+       ; int_param c.version
+       ; ts_param effective_ts
+       ; holdings_to_json c.holdings
+       ; float_param c.cash
+       ; float_param c.shares_outstanding
+      |]
+;;
+
 let composition_version t ~etf =
   single_int
     t
@@ -212,6 +239,57 @@ let upsert_price t table (p : Price.t) =
     ~params:[| p.symbol; float_param p.price; int_param p.source_offset; ts_param p.ts |]
 ;;
 
+(* Array literals for unnest. Text elements are quoted with backslash escapes; numbers
+   and NULL are bare. *)
+let array_param elements = "{" ^ String.concat ~sep:"," elements ^ "}"
+
+let quoted s =
+  "\""
+  ^ String.concat_map s ~f:(function
+    | '"' -> "\\\""
+    | '\\' -> "\\\\"
+    | c -> String.of_char c)
+  ^ "\""
+;;
+
+let text_array xs = array_param (List.map xs ~f:quoted)
+let float_array xs = array_param (List.map xs ~f:float_param)
+let int_array xs = array_param (List.map xs ~f:int_param)
+
+let float_option_array xs =
+  array_param (List.map xs ~f:(Option.value_map ~default:"NULL" ~f:float_param))
+;;
+
+let ts_array xs = array_param (List.map xs ~f:ts_param)
+
+let upsert_prices t table (prices : Price.t list) =
+  if not (List.is_empty prices)
+  then (
+    let table, key = price_table table in
+    command
+      t
+      (sprintf
+         {|INSERT INTO %s (%s, price, source_offset, ts)
+           SELECT key, price, source_offset,
+                  timestamptz 'epoch' + micros * interval '1 microsecond'
+           FROM unnest($1::text[], $2::float8[], $3::bigint[], $4::bigint[])
+             AS u(key, price, source_offset, micros)
+           ON CONFLICT (%s) DO UPDATE
+           SET price = EXCLUDED.price, source_offset = EXCLUDED.source_offset,
+               ts = EXCLUDED.ts
+           WHERE %s.source_offset < EXCLUDED.source_offset|}
+         table
+         key
+         key
+         table)
+      ~params:
+        [| text_array (List.map prices ~f:(fun p -> p.symbol))
+         ; float_array (List.map prices ~f:(fun p -> p.price))
+         ; int_array (List.map prices ~f:(fun p -> p.source_offset))
+         ; ts_array (List.map prices ~f:(fun p -> p.ts))
+        |])
+;;
+
 let price_offset t table ~symbol =
   let table, key = price_table table in
   single_int
@@ -252,11 +330,34 @@ let upsert_snapshot t (s : Snapshot.t) =
        (ts_value 5))
     ~params:
       [| s.etf
-       ; float_param s.nav
+       ; Option.value_map s.nav ~default:Postgresql.null ~f:float_param
        ; Option.value_map s.premium ~default:Postgresql.null ~f:float_param
        ; int_param s.source_offset
        ; ts_param s.ts
       |]
+;;
+
+let upsert_snapshots t (snapshots : Snapshot.t list) =
+  if not (List.is_empty snapshots)
+  then
+    command
+      t
+      {|INSERT INTO nav_snapshot (etf, nav, premium, source_offset, ts)
+        SELECT etf, nav, premium, source_offset,
+               timestamptz 'epoch' + micros * interval '1 microsecond'
+        FROM unnest($1::text[], $2::float8[], $3::float8[], $4::bigint[], $5::bigint[])
+          AS u(etf, nav, premium, source_offset, micros)
+        ON CONFLICT (etf) DO UPDATE
+        SET nav = EXCLUDED.nav, premium = EXCLUDED.premium,
+            source_offset = EXCLUDED.source_offset, ts = EXCLUDED.ts
+        WHERE nav_snapshot.source_offset < EXCLUDED.source_offset|}
+      ~params:
+        [| text_array (List.map snapshots ~f:(fun s -> s.etf))
+         ; float_option_array (List.map snapshots ~f:(fun s -> s.nav))
+         ; float_option_array (List.map snapshots ~f:(fun s -> s.premium))
+         ; int_array (List.map snapshots ~f:(fun s -> s.source_offset))
+         ; ts_array (List.map snapshots ~f:(fun s -> s.ts))
+        |]
 ;;
 
 let snapshot_offset t ~etf =
@@ -270,9 +371,9 @@ let snapshots t =
        "SELECT etf, nav, premium, source_offset, %s FROM nav_snapshot ORDER BY etf"
        (ts_column "ts"))
   |> List.map ~f:(function
-    | [ Some etf; Some nav; premium; Some offset; Some ts ] ->
+    | [ Some etf; nav; premium; Some offset; Some ts ] ->
       { Snapshot.etf
-      ; nav = Float.of_string nav
+      ; nav = Option.map nav ~f:Float.of_string
       ; premium = Option.map premium ~f:Float.of_string
       ; source_offset = Int.of_string offset
       ; ts = ts_of_micros ts

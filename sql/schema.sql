@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS nav_snapshot (
 CREATE TABLE IF NOT EXISTS rebalance_transition (
   etf text NOT NULL,
   rebalance_id int NOT NULL,
-  seq int NOT NULL,
+  -- Source offset of the row's first step (ADR 0007).
+  seq bigint NOT NULL,
+  -- Phase after the row's steps; detail holds the steps.
   state text NOT NULL,
   detail jsonb,
   first_ts timestamptz NOT NULL,
@@ -48,5 +50,6 @@ CREATE TABLE IF NOT EXISTS etf_price (
   ts timestamptz NOT NULL
 );
 
--- Databases created before ADR 0006.
+-- Databases created before ADR 0006 and 0007.
 ALTER TABLE nav_snapshot ALTER COLUMN nav DROP NOT NULL;
+ALTER TABLE rebalance_transition ALTER COLUMN seq TYPE bigint;

@@ -51,22 +51,37 @@ let full () =
   }
 ;;
 
+module Step = struct
+  type t =
+    { last_affected : (string, int * Timestamp.t) Hashtbl.t
+    ; rebalances : Rebalance.Outcome.t option list
+    ; changed : string list
+    }
+end
+
 (* Applies [records] and stabilizes. Returns, for each ETF the batch affected, the
-   offset and timestamp of the last event that affected it, and the ETFs whose values
-   changed. *)
+   offset and timestamp of the last event that affected it, each record's rebalance
+   outcome, and the ETFs whose values changed. *)
 let step graph (records : Source.record list) =
   let last_affected = Hashtbl.create (module String) in
-  List.iter records ~f:(fun { Source.offset; event } ->
-    let ts = Event.ts event in
-    Incremental_nav.apply graph event ~affected:(fun etf ->
-      Hashtbl.set last_affected ~key:etf ~data:(offset, ts)));
+  let rebalances =
+    List.map records ~f:(fun { Source.offset; event } ->
+      let ts = Event.ts event in
+      let rebalance = ref None in
+      Incremental_nav.apply
+        graph
+        event
+        ~affected:(fun etf -> Hashtbl.set last_affected ~key:etf ~data:(offset, ts))
+        ~rebalance:(fun outcome -> rebalance := Some outcome);
+      !rebalance)
+  in
   Incremental_nav.stabilize graph;
-  last_affected, Incremental_nav.take_changed graph
+  { Step.last_affected; rebalances; changed = Incremental_nav.take_changed graph }
 ;;
 
 (* The batch's NAV updates all go on its last change, with the offsets of the events that
    affected each ETF, so the stored snapshots do not depend on where batches start. *)
-let changes graph (records : Source.record list) ~last_affected =
+let changes graph (records : Source.record list) { Step.last_affected; rebalances; _ } =
   let navs =
     Hashtbl.to_alist last_affected
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
@@ -79,8 +94,9 @@ let changes graph (records : Source.record list) ~last_affected =
       })
   in
   let last = List.length records - 1 in
-  List.mapi records ~f:(fun i { Source.offset; event } ->
-    { Change.offset; event; navs = (if i = last then navs else []) })
+  List.zip_exn records rebalances
+  |> List.mapi ~f:(fun i ({ Source.offset; event }, rebalance) ->
+    { Change.offset; event; navs = (if i = last then navs else []); rebalance })
 ;;
 
 let restore_incremental graph events =
@@ -94,10 +110,7 @@ let incremental () =
   let graph = Incremental_nav.create () in
   { name = "incremental"
   ; restore = restore_incremental graph
-  ; compute =
-      (fun records ->
-        let last_affected, (_ : string list) = step graph records in
-        changes graph records ~last_affected)
+  ; compute = (fun records -> changes graph records (step graph records))
   ; stats =
       (fun () ->
         { Stats.recomputes = Some (Incremental_nav.recomputes graph); oracle = None })
@@ -143,17 +156,17 @@ let checked () =
     List.iter records ~f:(fun { Source.offset; event } ->
       List.iter (Full_recompute.apply full event) ~f:(fun etf ->
         Hashtbl.set full_affected ~key:etf ~data:offset));
-    let last_affected, changed = step graph records in
-    let graph_affected = Hashtbl.map last_affected ~f:fst in
+    let step = step graph records in
+    let graph_affected = Hashtbl.map step.last_affected ~f:fst in
     if not (Hashtbl.equal Int.equal full_affected graph_affected)
     then incr affected_mismatches;
     let to_check = String.Hash_set.of_list (Hashtbl.keys full_affected) in
     List.iter (Hashtbl.keys graph_affected) ~f:(Hash_set.add to_check);
-    List.iter changed ~f:(Hash_set.add to_check);
+    List.iter step.changed ~f:(Hash_set.add to_check);
     Option.iter (List.last records) ~f:(fun last ->
       incr batches;
       Hash_set.iter to_check ~f:(check ~offset:last.offset));
-    changes graph records ~last_affected
+    changes graph records step
   in
   { name = "checked"
   ; restore =

@@ -25,19 +25,30 @@ let write_price store table ~symbol ~price ~offset ~ts =
       Store.upsert_price store table { symbol; price; source_offset = offset; ts })
 ;;
 
+let write_composition store ((composition : Composition.t), ts) =
+  write_versioned
+    ~what:composition.etf
+    ~version:composition.version
+    ~read:(fun () -> Store.composition_version store ~etf:composition.etf)
+    ~write:(fun () -> Store.insert_composition store composition ~effective_ts:ts)
+;;
+
 let write_event store ~offset (event : Event.t) =
   match event with
   | Price { symbol; price; ts } ->
     write_price store Holding_prices ~symbol ~price ~offset ~ts
   | Etf_price { etf; price; ts } ->
     write_price store Etf_prices ~symbol:etf ~price ~offset ~ts
-  | Composition { composition; ts } ->
-    write_versioned
-      ~what:composition.etf
-      ~version:composition.version
-      ~read:(fun () -> Store.composition_version store ~etf:composition.etf)
-      ~write:(fun () -> Store.insert_composition store composition ~effective_ts:ts)
+  | Composition { composition; ts } -> write_composition store (composition, ts)
   | Rebalance _ -> ()
+;;
+
+let write_transition store (tr : Rebalance.Transition.t) =
+  write_versioned
+    ~what:(sprintf "%s rebalance %d" tr.etf tr.id)
+    ~version:tr.seq
+    ~read:(fun () -> Store.last_transition_seq store ~etf:tr.etf ~id:tr.id)
+    ~write:(fun () -> Store.insert_transition store tr)
 ;;
 
 let write_snapshot store (update : Change.Nav_update.t) =
@@ -51,6 +62,8 @@ let write_snapshot store (update : Change.Nav_update.t) =
 let write_change store ~topic (change : Change.t) =
   Store.transaction store ~f:(fun () ->
     write_event store ~offset:change.offset change.event;
+    Option.iter (Change.applied change) ~f:(write_composition store);
+    Option.iter (Change.transition change) ~f:(write_transition store);
     List.iter change.navs ~f:(write_snapshot store);
     write_versioned
       ~what:topic

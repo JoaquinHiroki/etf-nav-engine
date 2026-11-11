@@ -115,20 +115,46 @@ module Gen = struct
       ]
   ;;
 
+  (* A rebalance through to [Apply], or cut short anywhere before it. *)
+  let rebalance =
+    let%bind (target : Composition.t) = composition
+    and id = Int.gen_incl 0 2 in
+    let steps =
+      Rebalance_step.[ Announce target; Validate; Begin_applying ]
+      @ Array.to_list (Array.map target.holdings ~f:(fun h -> Rebalance_step.Progress h))
+      @ Rebalance_step.[ Apply; Settle ]
+    in
+    let%map length = Int.gen_incl 1 (List.length steps) in
+    List.take steps length
+    |> List.map ~f:(fun step -> Event.Rebalance { etf = target.etf; id; step; ts })
+  ;;
+
   let events =
-    let%bind length = Int.gen_incl 0 60 in
-    List.gen_with_length length event
+    let%bind length = Int.gen_incl 0 30 in
+    let%map chunks =
+      List.gen_with_length
+        length
+        (Quickcheck.Generator.weighted_union
+           [ 9., Quickcheck.Generator.map event ~f:List.return; 1., rebalance ])
+    in
+    List.concat chunks
   ;;
 end
 
-let%test_unit "incremental equals full recompute bit for bit after every event" =
+let%expect_test "incremental equals full recompute bit for bit after every event" =
+  let applied = ref 0 in
   Quickcheck.test
     Gen.events
     ~sexp_of:[%sexp_of: Event.t list]
     ~shrinker:(List.quickcheck_shrinker Event.quickcheck_shrinker)
     ~f:(fun events ->
-      ignore
-        (run_both ~etfs:(Fn.const Gen.etfs) events ~f:(fun _ _ -> ()) : Incremental_nav.t))
+      let graph = run_both ~etfs:(Fn.const Gen.etfs) events ~f:(fun _ _ -> ()) in
+      if List.exists
+           (Rebalance.Book.to_list (Incremental_nav.rebalances graph))
+           ~f:(fun r -> Rebalance.Phase.(equal r.phase Applied || equal r.phase Settled))
+      then incr applied);
+  printf "streams with an applied rebalance: %d\n" !applied;
+  [%expect {| streams with an applied rebalance: 2909 |}]
 ;;
 
 let%expect_test "synthetic stream: equal after every event, with far fewer recomputes" =
@@ -167,8 +193,8 @@ let%expect_test "synthetic stream: equal after every event, with far fewer recom
     r.sums;
   [%expect
     {|
-    positions: full 1926912, incremental 63711
-    sums: full 1866696, incremental 300614 |}]
+    positions: full 1926752, incremental 64791
+    sums: full 1866541, incremental 301499 |}]
 ;;
 
 let%expect_test "a tick recomputes one path through the tree" =

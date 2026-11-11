@@ -104,6 +104,12 @@ let truncate_all t =
      etf_price"
 ;;
 
+let advisory_xact_lock t ~key =
+  ignore
+    (query t "SELECT pg_advisory_xact_lock(hashtext($1))" ~params:[| key |]
+     : string option list list)
+;;
+
 let try_advisory_lock t ~key =
   match query t "SELECT pg_try_advisory_lock(hashtext($1))" ~params:[| key |] with
   | [ [ Some "t" ] ] -> true
@@ -129,28 +135,81 @@ let single_int t ?params sql =
   | rows -> raise_s [%message "expected one value" (rows : string option list list)]
 ;;
 
-let holdings_to_json holdings =
-  `List
-    (Array.to_list holdings
-     |> List.map ~f:(fun { Holding.symbol; units } ->
-       `Assoc [ "symbol", `String symbol; "units", `Float units ]))
-  |> Yojson.Safe.to_string
+let holding_json { Holding.symbol; units } =
+  `Assoc [ "symbol", `String symbol; "units", `Float units ]
 ;;
 
-let holdings_of_json json =
-  let number = function
-    | `Float x -> x
-    | `Int x -> Float.of_int x
-    | `Intlit s -> Float.of_string s
-    | json -> raise_s [%message "expected a number" (Yojson.Safe.to_string json)]
-  in
-  Yojson.Safe.from_string json
-  |> Yojson.Safe.Util.to_list
-  |> List.map ~f:(fun holding ->
-    { Holding.symbol = Yojson.Safe.Util.(member "symbol" holding |> to_string)
-    ; units = number (Yojson.Safe.Util.member "units" holding)
-    })
-  |> Array.of_list
+let holdings_json holdings = `List (Array.to_list holdings |> List.map ~f:holding_json)
+let holdings_to_json holdings = Yojson.Safe.to_string (holdings_json holdings)
+
+let number = function
+  | `Float x -> x
+  | `Int x -> Float.of_int x
+  | `Intlit s -> Float.of_string s
+  | json -> raise_s [%message "expected a number" (Yojson.Safe.to_string json)]
+;;
+
+let holding_of_json json =
+  { Holding.symbol = Yojson.Safe.Util.(member "symbol" json |> to_string)
+  ; units = number (Yojson.Safe.Util.member "units" json)
+  }
+;;
+
+let holdings_of_json_value json =
+  Yojson.Safe.Util.to_list json |> List.map ~f:holding_of_json |> Array.of_list
+;;
+
+let holdings_of_json json = holdings_of_json_value (Yojson.Safe.from_string json)
+
+let composition_json (c : Composition.t) =
+  `Assoc
+    [ "etf", `String c.etf
+    ; "version", `Int c.version
+    ; "holdings", holdings_json c.holdings
+    ; "cash", `Float c.cash
+    ; "shares_outstanding", `Float c.shares_outstanding
+    ]
+;;
+
+let composition_of_json json =
+  let member name = Yojson.Safe.Util.member name json in
+  { Composition.etf = Yojson.Safe.Util.to_string (member "etf")
+  ; version = Yojson.Safe.Util.to_int (member "version")
+  ; holdings = holdings_of_json_value (member "holdings")
+  ; cash = number (member "cash")
+  ; shares_outstanding = number (member "shares_outstanding")
+  }
+;;
+
+let step_json (step : Rebalance_step.t) =
+  let kind name rest = `Assoc (("step", `String name) :: rest) in
+  match step with
+  | Announce c -> kind "announce" [ "target", composition_json c ]
+  | Validate -> kind "validate" []
+  | Reject reason -> kind "reject" [ "reason", `String reason ]
+  | Begin_applying -> kind "begin_applying" []
+  | Progress h -> kind "progress" [ "holding", holding_json h ]
+  | Apply -> kind "apply" []
+  | Settle -> kind "settle" []
+;;
+
+let step_of_json json : Rebalance_step.t =
+  let member name = Yojson.Safe.Util.member name json in
+  match Yojson.Safe.Util.to_string (member "step") with
+  | "announce" -> Announce (composition_of_json (member "target"))
+  | "validate" -> Validate
+  | "reject" -> Reject (Yojson.Safe.Util.to_string (member "reason"))
+  | "begin_applying" -> Begin_applying
+  | "progress" -> Progress (holding_of_json (member "holding"))
+  | "apply" -> Apply
+  | "settle" -> Settle
+  | step -> raise_s [%message "unknown rebalance step" step]
+;;
+
+let steps_to_json steps = Yojson.Safe.to_string (`List (List.map steps ~f:step_json))
+
+let steps_of_json json =
+  Yojson.Safe.from_string json |> Yojson.Safe.Util.to_list |> List.map ~f:step_of_json
 ;;
 
 let insert_composition t (c : Composition.t) ~effective_ts =
@@ -219,6 +278,88 @@ let latest_compositions t =
     | row -> unexpected_row row)
 ;;
 
+let insert_transition t (tr : Rebalance.Transition.t) =
+  command
+    t
+    (sprintf
+       {|INSERT INTO rebalance_transition
+           (etf, rebalance_id, seq, state, detail, first_ts, last_ts, merged_count)
+         VALUES ($1, $2, $3, $4, $5, %s, %s, $8)|}
+       (ts_value 6)
+       (ts_value 7))
+    ~params:
+      [| tr.etf
+       ; int_param tr.id
+       ; int_param tr.seq
+       ; Rebalance.Phase.to_string tr.phase
+       ; steps_to_json tr.steps
+       ; ts_param tr.first_ts
+       ; ts_param tr.last_ts
+       ; int_param (Rebalance.Transition.merged_count tr)
+      |]
+;;
+
+let last_transition_seq t ~etf ~id =
+  single_int
+    t
+    "SELECT max(seq) FROM rebalance_transition WHERE etf = $1 AND rebalance_id = $2 \
+     HAVING count(*) > 0"
+    ~params:[| etf; int_param id |]
+;;
+
+let delete_transitions t ~etf ~id =
+  command
+    t
+    "DELETE FROM rebalance_transition WHERE etf = $1 AND rebalance_id = $2"
+    ~params:[| etf; int_param id |]
+;;
+
+let transitions t =
+  query
+    t
+    (sprintf
+       {|SELECT etf, rebalance_id, seq, state, detail, %s, %s, merged_count
+         FROM rebalance_transition
+         ORDER BY etf, rebalance_id, seq|}
+       (ts_column "first_ts")
+       (ts_column "last_ts"))
+  |> List.map ~f:(function
+    | [ Some etf
+      ; Some id
+      ; Some seq
+      ; Some state
+      ; Some detail
+      ; Some first_ts
+      ; Some last_ts
+      ; Some merged_count
+      ] ->
+      let tr =
+        { Rebalance.Transition.etf
+        ; id = Int.of_string id
+        ; seq = Int.of_string seq
+        ; phase = Rebalance.Phase.of_string state
+        ; steps = steps_of_json detail
+        ; first_ts = ts_of_micros first_ts
+        ; last_ts = ts_of_micros last_ts
+        }
+      in
+      if Rebalance.Transition.merged_count tr <> Int.of_string merged_count
+      then raise_s [%message "merged_count disagrees with detail" etf id seq merged_count];
+      tr
+    | row -> unexpected_row row)
+;;
+
+let transition_storage t =
+  match
+    query
+      t
+      "SELECT count(*), coalesce(sum(pg_column_size(r.*)), 0) FROM rebalance_transition r"
+  with
+  | [ [ Some rows; Some bytes ] ] -> Int.of_string rows, Int.of_string bytes
+  | rows ->
+    raise_s [%message "unexpected storage result" (rows : string option list list)]
+;;
+
 let price_table = function
   | Holding_prices -> "price", "symbol"
   | Etf_prices -> "etf_price", "etf"
@@ -261,6 +402,34 @@ let float_option_array xs =
 ;;
 
 let ts_array xs = array_param (List.map xs ~f:ts_param)
+
+let insert_transitions t (transitions : Rebalance.Transition.t list) =
+  if not (List.is_empty transitions)
+  then (
+    let column f = List.map transitions ~f in
+    command
+      t
+      {|INSERT INTO rebalance_transition
+          (etf, rebalance_id, seq, state, detail, first_ts, last_ts, merged_count)
+        SELECT etf, rebalance_id, seq, state, detail,
+               timestamptz 'epoch' + first_micros * interval '1 microsecond',
+               timestamptz 'epoch' + last_micros * interval '1 microsecond',
+               merged_count
+        FROM unnest($1::text[], $2::int[], $3::bigint[], $4::text[], $5::jsonb[],
+                    $6::bigint[], $7::bigint[], $8::int[])
+          AS u(etf, rebalance_id, seq, state, detail, first_micros, last_micros,
+               merged_count)|}
+      ~params:
+        [| text_array (column (fun tr -> tr.etf))
+         ; int_array (column (fun tr -> tr.id))
+         ; int_array (column (fun tr -> tr.seq))
+         ; text_array (column (fun tr -> Rebalance.Phase.to_string tr.phase))
+         ; text_array (column (fun tr -> steps_to_json tr.steps))
+         ; ts_array (column (fun tr -> tr.first_ts))
+         ; ts_array (column (fun tr -> tr.last_ts))
+         ; int_array (column Rebalance.Transition.merged_count)
+        |])
+;;
 
 let upsert_prices t table (prices : Price.t list) =
   if not (List.is_empty prices)

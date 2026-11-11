@@ -7,7 +7,8 @@ let write store ~topic (changes : Change.t list) =
     let etf_prices = Hashtbl.create (module String) in
     let snapshots = Hashtbl.create (module String) in
     let compositions = Queue.create () in
-    List.iter changes ~f:(fun { offset; event; navs } ->
+    let transitions = Queue.create () in
+    List.iter changes ~f:(fun ({ offset; event; navs; rebalance = _ } as change) ->
       (match event with
        | Price { symbol; price; ts } ->
          Hashtbl.set
@@ -21,6 +22,8 @@ let write store ~topic (changes : Change.t list) =
            ~data:{ Store.Price.symbol = etf; price; source_offset = offset; ts }
        | Composition { composition; ts } -> Queue.enqueue compositions (composition, ts)
        | Rebalance _ -> ());
+      Option.iter (Change.applied change) ~f:(Queue.enqueue compositions);
+      Option.iter (Change.transition change) ~f:(Queue.enqueue transitions);
       List.iter navs ~f:(fun (update : Change.Nav_update.t) ->
         Hashtbl.set snapshots ~key:update.etf ~data:(Change.Nav_update.to_snapshot update)));
     Store.transaction store ~f:(fun () ->
@@ -29,6 +32,7 @@ let write store ~topic (changes : Change.t list) =
       Store.upsert_prices store Holding_prices (Hashtbl.data prices);
       Store.upsert_prices store Etf_prices (Hashtbl.data etf_prices);
       Store.upsert_snapshots store (Hashtbl.data snapshots);
+      Store.insert_transitions store (Queue.to_list transitions);
       Store.set_next_offset store ~topic (last.offset + 1)))
 ;;
 

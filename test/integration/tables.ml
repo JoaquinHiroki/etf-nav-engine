@@ -7,6 +7,7 @@ type t =
   ; prices : Store.Price.t list
   ; etf_prices : Store.Price.t list
   ; compositions : (Composition.t * Timestamp.t) list
+  ; transitions : Rebalance.Transition.t list
   ; next_offset : int option
   }
 [@@deriving compare, sexp]
@@ -16,9 +17,12 @@ let read store ~topic =
   ; prices = Store.prices store Holding_prices
   ; etf_prices = Store.prices store Etf_prices
   ; compositions = Store.latest_compositions store
+  ; transitions = Store.transitions store
   ; next_offset = Store.next_offset store ~topic
   }
 ;;
+
+let compacted t = { t with transitions = Rebalance.compact t.transitions }
 
 (* Reports the first row that differs rather than both tables in full. *)
 let check_rows ~what ~compare ~sexp_of ~expect actual =
@@ -71,6 +75,12 @@ let check ~expect actual =
     ~sexp_of:[%sexp_of: Composition.t * Timestamp.t]
     ~expect:expect.compositions
     actual.compositions;
+  check_rows
+    ~what:"rebalance_transition"
+    ~compare:Rebalance.Transition.compare
+    ~sexp_of:Rebalance.Transition.sexp_of_t
+    ~expect:expect.transitions
+    actual.transitions;
   [%test_result: int option]
     ~message:"next_offset"
     actual.next_offset

@@ -71,3 +71,38 @@ let%expect_test "stale or repeated compositions are ignored" =
   show events;
   [%expect {| ((nav (11)) (premium ())) |}]
 ;;
+
+let%expect_test "an applied rebalance makes its target the live composition" =
+  let target =
+    Composition.create
+      ~etf:"ETF"
+      ~version:2
+      ~holdings:[| { symbol = "BBB"; units = 2. } |]
+      ~cash:100.
+      ~shares_outstanding:10.
+    |> ok_exn
+  in
+  let rebalance step = Event.Rebalance { etf = "ETF"; id = 7; step; ts } in
+  let before =
+    [ composition [ "AAA", 1.; "BBB", 1. ]
+    ; price "AAA" 10.
+    ; price "BBB" 20.
+    ; rebalance (Announce target)
+    ; rebalance Validate
+    ; rebalance Begin_applying
+    ; rebalance (Progress { symbol = "BBB"; units = 2. })
+    ]
+  in
+  show before;
+  let state = Full_recompute.of_events before in
+  let affected = Full_recompute.apply state (rebalance Apply) in
+  print_s [%sexp (affected : string list)];
+  show (before @ [ rebalance Apply ]);
+  show (before @ [ rebalance Apply; composition ~version:2 [ "AAA", 5. ] ]);
+  [%expect
+    {|
+    ((nav (13)) (premium ()))
+    (ETF)
+    ((nav (14)) (premium ()))
+    ((nav (14)) (premium ())) |}]
+;;

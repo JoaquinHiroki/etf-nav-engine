@@ -182,9 +182,44 @@ now limits the service: the same computation runs at 418,100 events/s with `-wri
 
 ## 9. Rebalance state machine
 
-- `step`, `fold`, `compact` with an explicit transition table.
-- `Apply` swaps the live composition.
-- Compaction only on settled or rejected rebalances; storage measured.
+- `step`, `fold`, `compact` with an explicit transition table
+  ([ADR 0007](adr/0007-rebalance-state-machine.md)).
+- `Apply` swaps the live composition, in both models.
+- Every accepted step stored in `rebalance_transition` and replayed on recovery.
+- Compaction only on settled or rejected rebalances, safe while the engine runs;
+  storage measured.
+
+`make test`: over 2,000 generated streams with dropped, repeated and stray steps (17,921
+log rows, 23,241 rejected steps, every phase reached), folding the full and compacted
+logs gives the state built step by step. On a 100,000-event synthetic stream, 3,936 steps
+give 0 invalid steps and 3,936 rows, 816 after compaction (156 settled rebalances of 20
+holdings, 18 rejected). The random-stream property test applies a rebalance in 2,909 of
+its 10,000 streams and stays bit for bit equal to full recompute.
+
+Measured 2026-11-11 on the development laptop (Intel MacBook, Postgres 16.4 in Docker
+Desktop, default settings), reading the 10M-event file from `make data`. Single runs.
+
+`make integration`: restarted, optimized, mixed and compacted runs give the baseline's
+tables, and folding each stored log gives `Full_recompute`'s rebalances. The crash test
+killed the engine 8 times on 200,000 events (`CRASH_SEED=767000`), twice after compacting
+while it ran, and the final tables equal the uninterrupted run once both are compacted.
+
+`-model checked` at batch 1000: 0 mismatches and 0 batches with different affected
+ETFs over 1.0M ETF checks, with 51,675 accepted rebalance steps and 0 invalid ones.
+Applied rebalances raise the subgraphs built from 607 to 1,543.
+
+With the optimized writer at batch 1000 the engine ran at 26,400 events/s (p50 29.2 ms,
+p99 149 ms), against 32,000 in stage 8, making 4.7 statements per batch instead of 4.1.
+Compaction of the resulting log:
+
+| | Rows | Bytes |
+|-|------|-------|
+| Before | 51,675 | 10,159,300 |
+| After | 4,925 | 2,755,476 |
+
+Compaction rewrote 935 rebalances: 10.5 times fewer rows and 3.7 times fewer bytes. Bytes
+fall less than rows because the holdings stay in the merged `applying` rows' detail; what
+goes is each row's header and repeated columns. A second `make compact` rewrote nothing.
 
 ## 10. Benchmarks and report
 

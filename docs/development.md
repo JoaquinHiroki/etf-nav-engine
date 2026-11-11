@@ -1,6 +1,6 @@
 # Development
 
-Status: stage 8 of 10. See [roadmap.md](roadmap.md).
+Status: stage 9 of 10. See [roadmap.md](roadmap.md).
 
 ## Requirements
 
@@ -24,11 +24,12 @@ make setup
 | `make build` | Build everything |
 | `make test` | Run unit and property tests |
 | `make up` / `make down` | Start or stop Redpanda and Postgres, create topics and apply the schema |
-| `make integration` | Kafka round trip; baseline and optimized writers give equal tables; kill-and-restart test |
+| `make integration` | Kafka round trip; baseline and optimized writers give equal tables, with and without compaction; kill-and-restart test with compaction while running |
 | `make check` | Connect to both services from OCaml |
 | `make data` | Generate `data/generated/synthetic.events` (`EVENTS=10000000` by default) |
 | `make replay` | Publish the generated file to `etf.events.v1` at full speed, or at `RATE=N` events per second |
 | `make engine ARGS="..."` | Run the engine; see the examples below |
+| `make compact` | Compact the log of settled and rejected rebalances and print rows and bytes before and after |
 | `make oracle` | Check the incremental engine against full recompute over the generated file at batch sizes 1, 100 and 1000 (`MAX_EVENTS=N` to shorten) |
 | `make fmt` | Format the code |
 
@@ -76,21 +77,28 @@ truncates the tables and starts from offset 0; without it the engine restores st
 Postgres and continues from the stored offset. Add `-scheduled` when the topic was filled
 with `make replay RATE=N` to report latency since each event's scheduled send time.
 
+Rebalance steps go through the state machine of
+[ADR 0007](adr/0007-rebalance-state-machine.md). An applied rebalance makes its target
+the live composition, every accepted step is stored in `rebalance_transition` and
+restored on restart, and rejected steps are counted and ignored. `make compact` can run
+while the engine is running.
+
 The engine prints a report with throughput, latency percentiles, node recompute counts,
-oracle checks and database reads, writes and transactions.
+oracle checks, accepted and invalid rebalance steps, and database reads, writes and
+transactions.
 
 ## Layout
 
 ```
 bin/          entry points
 lib/config/   connection settings, overridable by environment
-lib/domain/   events, compositions, NAV formulas
+lib/domain/   events, compositions, NAV formulas, rebalance state machine
 lib/graph/    summation tree, full recompute and incremental graph
 lib/data/     event file format and synthetic generator
 lib/source/   replayable event source interface and in-memory source
 lib/kafka/    Kafka consumer (a Source) and producer
 lib/store/    Postgres persistence
-lib/engine/   engine loop, writers and recovery
+lib/engine/   engine loop, writers, recovery and compaction
 sql/          schema
 scripts/      topic and database setup
 test/         unit, expect and property tests

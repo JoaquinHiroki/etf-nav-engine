@@ -6,6 +6,7 @@ type t =
   ; etf_prices : (string, float) Hashtbl.t
   ; compositions : (string, Composition.t) Hashtbl.t
   ; holders : (string, String.Hash_set.t) Hashtbl.t
+  ; mutable rebalances : Rebalance.Book.t
   }
 
 let create () =
@@ -13,6 +14,7 @@ let create () =
   ; etf_prices = Hashtbl.create (module String)
   ; compositions = Hashtbl.create (module String)
   ; holders = Hashtbl.create (module String)
+  ; rebalances = Rebalance.Book.empty
   }
 ;;
 
@@ -34,7 +36,15 @@ let is_newer t (composition : Composition.t) =
   | Some current -> composition.version > current.version
 ;;
 
-let apply t (event : Event.t) =
+let set_if_newer t (composition : Composition.t) =
+  if is_newer t composition
+  then (
+    set_composition t composition;
+    [ composition.etf ])
+  else []
+;;
+
+let apply ?(rebalance = ignore) t (event : Event.t) =
   match event with
   | Price { symbol; price; ts = _ } ->
     Hashtbl.set t.prices ~key:symbol ~data:price;
@@ -43,13 +53,14 @@ let apply t (event : Event.t) =
   | Etf_price { etf; price; ts = _ } ->
     Hashtbl.set t.etf_prices ~key:etf ~data:price;
     [ etf ]
-  | Composition { composition; ts = _ } ->
-    if is_newer t composition
-    then (
-      set_composition t composition;
-      [ composition.etf ])
-    else []
-  | Rebalance _ -> []
+  | Composition { composition; ts = _ } -> set_if_newer t composition
+  | Rebalance { etf; id; step; ts } ->
+    let book, outcome = Rebalance.step t.rebalances ~etf ~id step ~ts in
+    t.rebalances <- book;
+    rebalance outcome;
+    (match outcome with
+     | Accepted { applied = Some target; _ } -> set_if_newer t target
+     | Accepted { applied = None; _ } | Invalid _ -> [])
 ;;
 
 let of_events events =
@@ -76,6 +87,7 @@ let nav t ~etf =
 ;;
 
 let etf_price t ~etf = Hashtbl.find t.etf_prices etf
+let rebalances t = t.rebalances
 
 let premium t ~etf =
   let%bind.Option nav = nav t ~etf in

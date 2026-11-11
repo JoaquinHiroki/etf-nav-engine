@@ -3,7 +3,7 @@ OCAML_VERSION := 4.14.2
 EVENTS ?= 10000000
 DATA := data/generated/synthetic.events
 
-.PHONY: setup build test integration fmt up down check data replay engine oracle clean
+.PHONY: setup build test integration fmt up down check data replay engine compact oracle clean
 
 setup:
 	test -d _opam || opam switch create . ocaml-base-compiler.$(OCAML_VERSION) --no-install --yes
@@ -41,6 +41,9 @@ replay: up
 
 engine: up
 	opam exec -- dune exec --profile release bin/engine.exe -- $(ARGS)
+
+compact: up
+	opam exec -- dune exec --profile release bin/compact.exe
 
 oracle:
 	for batch in 1 100 1000; do \

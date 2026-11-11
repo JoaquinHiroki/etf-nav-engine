@@ -59,6 +59,10 @@ val insert_composition : t -> Composition.t -> effective_ts:Time_ns.t -> unit
 (** Inserts unless the ETF already has this version or a later one, without a read. *)
 val insert_composition_if_newer : t -> Composition.t -> effective_ts:Time_ns.t -> unit
 
+(** Takes a transaction-level advisory lock on [key], waiting for it. Must run inside
+    [transaction]. *)
+val advisory_xact_lock : t -> key:string -> unit
+
 val composition_version : t -> etf:string -> int option
 val latest_compositions : t -> (Composition.t * Time_ns.t) list
 val upsert_price : t -> price_table -> Price.t -> unit
@@ -75,6 +79,23 @@ val upsert_snapshot : t -> Snapshot.t -> unit
 val upsert_snapshots : t -> Snapshot.t list -> unit
 
 val snapshot_offset : t -> etf:string -> int option
+
+(** The rebalance log. [state] holds the phase after the row's steps, [detail] the steps
+    as JSON and [seq] the source offset of the first step. *)
+val insert_transition : t -> Rebalance.Transition.t -> unit
+
+(** One statement for all rows. *)
+val insert_transitions : t -> Rebalance.Transition.t list -> unit
+
+val last_transition_seq : t -> etf:string -> id:int -> int option
+val delete_transitions : t -> etf:string -> id:int -> unit
+
+(** Sorted by ETF, rebalance id and [seq]. *)
+val transitions : t -> Rebalance.Transition.t list
+
+(** Rows and bytes of row data in [rebalance_transition], by [pg_column_size]. *)
+val transition_storage : t -> int * int
+
 val snapshots : t -> Snapshot.t list
 val set_next_offset : t -> topic:string -> int -> unit
 val next_offset : t -> topic:string -> int option

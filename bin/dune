@@ -1,5 +1,5 @@
 (executables
- (names check_services engine generate replay)
+ (names check_services compact engine generate replay)
  (libraries
   core
   core_unix

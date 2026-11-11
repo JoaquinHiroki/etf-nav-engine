@@ -1,6 +1,7 @@
 open! Core
 open Nav_config
 open Nav_data
+open Nav_domain
 open Nav_engine
 open Nav_graph
 open Nav_source
@@ -55,8 +56,14 @@ let check_against_oracle (tables : Tables.t) =
   in
   let actual = List.map tables.snapshots ~f:(fun s -> s.etf, s.nav, s.premium) in
   [%test_result: (string * float option * float option) list] actual ~expect:expected;
+  [%test_result: Rebalance.Book.t]
+    ~message:"folded rebalance log"
+    (Rebalance.fold tables.transitions)
+    ~expect:(Full_recompute.rebalances oracle);
   [%test_result: int option] tables.next_offset ~expect:(Some (Array.length events))
 ;;
+
+let compact store = ignore (Compaction.run store : Compaction.Report.t)
 
 (* Truncates, runs [f] and returns the tables and the statements per event. *)
 let fresh store ~f =
@@ -100,10 +107,32 @@ let () =
       run_engine store optimized ~batch_size:1000 ())
   in
   Tables.check ~expect:reference mixed;
+  (* Compacting between runs leaves recovery unchanged, and compacting at the end gives
+     the reference log compacted in memory. *)
+  let compacted, _ =
+    fresh store ~f:(fun () ->
+      run_engine store optimized ~batch_size:50 ~max_events:1_234 ();
+      compact store;
+      run_engine store baseline ~batch_size:7 ~max_events:700 ();
+      compact store;
+      run_engine store optimized ~batch_size:1000 ())
+  in
+  check_against_oracle compacted;
+  let before_final = List.length compacted.transitions in
+  compact store;
+  let compacted = Tables.read store ~topic in
+  Tables.check ~expect:(Tables.compacted reference) compacted;
+  check_against_oracle compacted;
   Store.close store;
   printf
-    "baseline ok: %d events, %d snapshots; restarted, optimized and mixed runs give \
-     equal tables\n"
+    "baseline ok: %d events, %d snapshots; restarted, optimized, mixed and compacted \
+     runs give equal tables\n"
     (Array.length events)
-    (List.length reference.snapshots)
+    (List.length reference.snapshots);
+  printf
+    "rebalance log: %d rows, %d after compacting between runs, %d after the final \
+     compaction\n"
+    (List.length reference.transitions)
+    before_final
+    (List.length compacted.transitions)
 ;;

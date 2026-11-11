@@ -44,6 +44,7 @@ type 'w state =
   ; holders : (string, String.Hash_set.t) Hashtbl.t
   ; counters : counters
   ; changed : String.Hash_set.t
+  ; mutable rebalances : Rebalance.Book.t
   ; mutable stale : bool
   }
 
@@ -70,6 +71,7 @@ let create () =
     ; holders = Hashtbl.create (module String)
     ; counters = { positions = 0; sums = 0; navs = 0; premiums = 0; subgraphs = 0 }
     ; changed = String.Hash_set.create ()
+    ; rebalances = Rebalance.Book.empty
     ; stale = false
     }
 ;;
@@ -179,7 +181,7 @@ let set_composition s (composition : Composition.t) =
     else false
 ;;
 
-let apply ?(affected = ignore) (T s) (event : Event.t) =
+let apply ?(affected = ignore) ?(rebalance = ignore) (T s) (event : Event.t) =
   s.stale <- true;
   match event with
   | Price { symbol; price; ts = _ } ->
@@ -190,7 +192,14 @@ let apply ?(affected = ignore) (T s) (event : Event.t) =
     affected etf
   | Composition { composition; ts = _ } ->
     if set_composition s composition then affected composition.etf
-  | Rebalance _ -> ()
+  | Rebalance { etf; id; step; ts } ->
+    let book, outcome = Rebalance.step s.rebalances ~etf ~id step ~ts in
+    s.rebalances <- book;
+    rebalance outcome;
+    (match outcome with
+     | Accepted { applied = Some target; _ } ->
+       if set_composition s target then affected target.etf
+     | Accepted { applied = None; _ } | Invalid _ -> ())
 ;;
 
 let stabilize (T s) =
@@ -220,6 +229,7 @@ let nav (T s) ~etf =
 
 let premium (T s) ~etf = Option.join (observed s ~etf ~f:(fun e -> e.premium))
 let etf_price (T s) ~etf = Option.bind (Hashtbl.find s.etf_prices etf) ~f:Var.value
+let rebalances (T s) = s.rebalances
 
 let recomputes (T s) =
   let { positions; sums; navs; premiums; subgraphs } = s.counters in

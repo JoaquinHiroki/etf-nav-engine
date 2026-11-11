@@ -15,6 +15,7 @@ let load store ~topic =
     List.map (Store.prices store Etf_prices) ~f:(fun { symbol; price; ts; _ } ->
       Event.Etf_price { etf = symbol; price; ts })
   in
-  ( List.concat [ compositions; prices; etf_prices ]
+  ( List.concat
+      [ compositions; prices; etf_prices; Rebalance.events (Store.transitions store) ]
   , Store.next_offset store ~topic |> Option.value ~default:0 )
 ;;

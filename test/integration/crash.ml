@@ -1,6 +1,7 @@
 open! Core
 open Nav_config
 open Nav_data
+open Nav_engine
 open Nav_store
 
 (* Usage: crash.exe ENGINE. Set CRASH_SEED to repeat a run's choices; kill timing still
@@ -99,11 +100,13 @@ let () =
   let started = Time_ns.now () in
   run_to_completion "uninterrupted run" (args ~batch:250);
   let seconds = Time_ns.Span.to_sec (Time_ns.diff (Time_ns.now ()) started) in
+  let final_compaction = Compaction.run store in
   let reference = Tables.read store ~topic in
   [%test_result: int option] reference.next_offset ~expect:(Some config.events);
   (* Kill at random points, restarting each time with a random batch size. *)
   Store.truncate_all store;
   let kills = Queue.create () in
+  let live_compactions = ref 0 in
   let rec run () =
     let batch = List.random_element_exn ~random_state:random batch_sizes in
     let pid = spawn (args ~batch) in
@@ -116,7 +119,13 @@ let () =
         run ())
       else expect_success "final run" status)
     else (
-      let delay = 0.05 +. Random.State.float random (seconds /. 2.) in
+      (* Within the time the remaining events should take, so that later kills still
+         land before the engine finishes. *)
+      let remaining =
+        let committed = Store.next_offset store ~topic |> Option.value ~default:0 in
+        seconds *. Float.of_int (config.events - committed) /. Float.of_int config.events
+      in
+      let delay = 0.05 +. Random.State.float random (0.8 *. remaining) in
       let deadline = Time_ns.add (Time_ns.now ()) (Time_ns.Span.of_sec delay) in
       match wait_until pid ~deadline with
       | `Exited (Ok ()) -> ()
@@ -125,20 +134,30 @@ let () =
         run ()
       | `Exited status -> expect_success "restarted run" status
       | `Running ->
+        (* Terminal rebalances can be compacted while the engine writes. *)
+        if Random.State.bool random
+        then (
+          ignore (Compaction.run store : Compaction.Report.t);
+          incr live_compactions);
         Signal_unix.send_exn Signal.kill (`Pid pid);
         ignore (Core_unix.waitpid pid : Core_unix.Exit_or_signal.t);
         Queue.enqueue kills (Store.next_offset store ~topic |> Option.value ~default:0);
         run ())
   in
   run ();
+  ignore (Compaction.run store : Compaction.Report.t);
   Tables.check ~expect:reference (Tables.read store ~topic);
   Store.close store;
   Core_unix.unlink path;
   printf
-    "crash ok (CRASH_SEED=%d): %d events, killed %d times with next_offset at [%s]; \
-     tables equal the uninterrupted run\n"
+    "crash ok (CRASH_SEED=%d): %d events, killed %d times with next_offset at [%s], %d \
+     compactions while running; tables equal the uninterrupted run\n"
     seed
     config.events
     (Queue.length kills)
     (Queue.to_list kills |> List.map ~f:Int.to_string |> String.concat ~sep:", ")
+    !live_compactions;
+  print_s
+    [%message
+      "compaction of the uninterrupted run" (final_compaction : Compaction.Report.t)]
 ;;

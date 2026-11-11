@@ -25,11 +25,17 @@ end
 val create : unit -> t
 
 (** Records [event] without recomputing anything. Compositions only replace a lower
-    version, as in {!Full_recompute}. Rebalance events are not applied yet.
+    version, and rebalance steps go through {!Rebalance.step}, as in {!Full_recompute}.
 
     [affected] is called once for each ETF that {!Full_recompute.apply} would return for
-    the same event, in no particular order. *)
-val apply : ?affected:(string -> unit) -> t -> Event.t -> unit
+    the same event, in no particular order. [rebalance] receives the outcome of a
+    rebalance step. *)
+val apply
+  :  ?affected:(string -> unit)
+  -> ?rebalance:(Rebalance.Outcome.t -> unit)
+  -> t
+  -> Event.t
+  -> unit
 
 (** Recomputes the nodes affected by the events applied since the last call. *)
 val stabilize : t -> unit
@@ -46,5 +52,6 @@ val nav : t -> etf:string -> float option
 
 val premium : t -> etf:string -> float option
 val etf_price : t -> etf:string -> float option
+val rebalances : t -> Rebalance.Book.t
 val recomputes : t -> Recomputes.t
 val reset_recomputes : t -> unit

@@ -18,6 +18,8 @@ module Report : sig
     ; batch_size : int
     ; events : int
     ; nav_updates : int
+    ; rebalance_transitions : int
+    ; invalid_rebalance_steps : int
     ; seconds : float
     ; events_per_second : float
     ; processing_latency : Latency.t option

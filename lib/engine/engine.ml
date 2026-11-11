@@ -34,6 +34,8 @@ module Report = struct
     ; batch_size : int
     ; events : int
     ; nav_updates : int
+    ; rebalance_transitions : int
+    ; invalid_rebalance_steps : int
     ; seconds : float
     ; events_per_second : float
     ; processing_latency : Latency.t option
@@ -59,6 +61,8 @@ let run
   let since_event_ts = Queue.create () in
   let events = ref 0 in
   let nav_updates = ref 0 in
+  let rebalance_transitions = ref 0 in
+  let invalid_rebalance_steps = ref 0 in
   let started = ref None in
   let finished = ref (Time_ns.now ()) in
   let rec loop ~last_activity =
@@ -78,6 +82,10 @@ let run
         let written = Time_ns.now () in
         List.iter changes ~f:(fun change ->
           nav_updates := !nav_updates + List.length change.navs;
+          (match change.rebalance with
+           | Some (Accepted _) -> incr rebalance_transitions
+           | Some (Invalid _) -> incr invalid_rebalance_steps
+           | None -> ());
           Queue.enqueue processing (Time_ns.Span.to_int_ns (Time_ns.diff written polled));
           Queue.enqueue
             since_event_ts
@@ -96,6 +104,8 @@ let run
   ; batch_size
   ; events = !events
   ; nav_updates = !nav_updates
+  ; rebalance_transitions = !rebalance_transitions
+  ; invalid_rebalance_steps = !invalid_rebalance_steps
   ; seconds
   ; events_per_second =
       (if Float.(seconds > 0.) then Float.of_int !events /. seconds else 0.)

@@ -24,18 +24,24 @@ end
 (** Each graph has its own [Incremental] state. *)
 val create : unit -> t
 
-(** Records [event] without recomputing anything. Compositions only replace a lower
-    version, and rebalance steps go through {!Rebalance.step}, as in {!Full_recompute}.
+module Affected : sig
+  (** An ETF affected since the last {!take_affected}, with the offset and timestamp of
+      the last event that affected it. *)
+  type t =
+    { etf : string
+    ; offset : int
+    ; ts : Timestamp.t
+    }
+  [@@deriving compare, sexp]
+end
 
-    [affected] is called once for each ETF that {!Full_recompute.apply} would return for
-    the same event, in no particular order. [rebalance] receives the outcome of a
-    rebalance step. *)
-val apply
-  :  ?affected:(string -> unit)
-  -> ?rebalance:(Rebalance.Outcome.t -> unit)
-  -> t
-  -> Event.t
-  -> unit
+(** Records [event], read at [offset], without recomputing anything. Compositions only
+    replace a lower version, and rebalance steps go through {!Rebalance.step}, as in
+    {!Full_recompute}.
+
+    Marks as affected each ETF that {!Full_recompute.apply} would return for the same
+    event, and returns the outcome of a rebalance step. *)
+val apply : t -> offset:int -> Event.t -> Rebalance.Outcome.t option
 
 (** Recomputes the nodes affected by the events applied since the last call. *)
 val stabilize : t -> unit
@@ -45,6 +51,9 @@ val etfs : t -> string list
 (** The ETFs whose NAV or premium changed, by bits, in the stabilizations since the last
     call, sorted. An ETF's first stabilization counts as a change. *)
 val take_changed : t -> string list
+
+(** The ETFs marked by {!apply} since the last call, sorted. *)
+val take_affected : t -> Affected.t list
 
 (** [nav] and [premium] raise if events were applied since the last [stabilize]. They
     return [None] in the same cases as {!Full_recompute}. *)

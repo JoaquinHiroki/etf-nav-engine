@@ -24,3 +24,6 @@ val rebalances : t -> Rebalance.Book.t
 
 (** [None] until both the NAV and the ETF's own price are known. *)
 val premium : t -> etf:string -> float option
+
+(** [nav] and [premium] from one pass over the holdings. *)
+val nav_and_premium : t -> etf:string -> float option * float option

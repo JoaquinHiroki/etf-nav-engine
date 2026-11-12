@@ -3,7 +3,7 @@ OCAML_VERSION := 4.14.2
 EVENTS ?= 10000000
 DATA := data/generated/synthetic.events
 
-.PHONY: setup build test integration fmt up down check data replay engine compact oracle clean
+.PHONY: setup build test integration fmt up down check data replay engine compact oracle bench clean
 
 setup:
 	test -d _opam || opam switch create . ocaml-base-compiler.$(OCAML_VERSION) --no-install --yes
@@ -51,6 +51,17 @@ oracle:
 	    -input $(DATA) -batch $$batch -idle-seconds 0 $(if $(MAX_EVENTS),-max-events $(MAX_EVENTS)) \
 	    || exit 1; \
 	done
+
+$(DATA):
+	mkdir -p data/generated
+	opam exec -- dune exec --profile release bin/generate.exe -- -output $(DATA) -events 10000000
+
+bench: $(DATA)
+	docker compose stop redpanda
+	docker compose up -d --wait postgres
+	./scripts/init.sh
+	opam exec -- dune build --profile release bin/engine.exe bench/micro.exe bench/macro.exe
+	./scripts/bench.sh
 
 clean:
 	opam exec -- dune clean

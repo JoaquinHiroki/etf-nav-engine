@@ -1,6 +1,6 @@
 # Development
 
-Status: stage 9 of 10. See [roadmap.md](roadmap.md).
+Status: stage 10 of 10. See [roadmap.md](roadmap.md).
 
 ## Requirements
 
@@ -31,6 +31,7 @@ make setup
 | `make engine ARGS="..."` | Run the engine; see the examples below |
 | `make compact` | Compact the log of settled and rejected rebalances and print rows and bytes before and after |
 | `make oracle` | Check the incremental engine against full recompute over the generated file at batch sizes 1, 100 and 1000 (`MAX_EVENTS=N` to shorten) |
+| `make bench` | Run the microbenchmarks and five rounds of engine runs, and write `bench/results.md` (`RUNS`, `SCALE`, `QUOTA` to change; about an hour) |
 | `make fmt` | Format the code |
 
 ## Services
@@ -87,10 +88,28 @@ The engine prints a report with throughput, latency percentiles, node recompute 
 oracle checks, accepted and invalid rebalance steps, and database reads, writes and
 transactions.
 
+## Benchmarks
+
+`make bench` generates the event file if it is missing, then writes `bench/results.md`:
+the machine, Docker and Postgres settings, the generator settings, the `Core_bench`
+microbenchmarks in `bench/micro.ml`, and the engine runs in `bench/macro.ml`. Each engine
+run is a separate process; rounds are interleaved, and each measure is reported as the
+median and range over the rounds. Runs with a writer truncate the `nav` database. No
+benchmark reads Kafka, so `make bench` stops Redpanda and starts only Postgres; `make up`
+brings Redpanda back.
+
+`SCALE=0.1` divides every event count by ten and `RUNS=1` runs one round, for a quick
+check. Comparing a new `bench/results.md` with the committed one with `git diff` shows
+how far a rerun moved. Close other applications first: the runs are CPU bound, and the
+writer runs also depend on Docker's disk. On a laptop, `caffeinate -i make bench` keeps
+macOS from sleeping. A failed engine run does not stop the others: its row shows how many
+rounds succeeded, and `make bench` exits non-zero after writing the file.
+
 ## Layout
 
 ```
 bin/          entry points
+bench/        microbenchmarks, engine benchmark driver and published results
 lib/config/   connection settings, overridable by environment
 lib/domain/   events, compositions, NAV formulas, rebalance state machine
 lib/graph/    summation tree, full recompute and incremental graph

@@ -12,6 +12,7 @@ depends: [
   "ppx_jane" {>= "v0.16" & < "v0.17"}
   "core_unix" {>= "v0.16" & < "v0.17"}
   "incremental" {>= "v0.16" & < "v0.17"}
+  "core_bench" {>= "v0.16" & < "v0.17"}
   "kafka" {= "0.5"}
   "postgresql" {= "5.2.0"}
   "yojson" {>= "2.0"}

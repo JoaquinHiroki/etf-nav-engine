@@ -9,9 +9,11 @@ psql() {
     psql -U nav -v ON_ERROR_STOP=1 -q "$@"
 }
 
-for topic in etf.events.v1 etf.events.test; do
-  rpk topic describe "$topic" >/dev/null 2>&1 || rpk topic create "$topic" --partitions 1
-done
+if docker compose ps --status running --services | grep -qx redpanda; then
+  for topic in etf.events.v1 etf.events.test; do
+    rpk topic describe "$topic" >/dev/null 2>&1 || rpk topic create "$topic" --partitions 1
+  done
+fi
 
 echo "SELECT 'CREATE DATABASE nav_test'
       WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'nav_test') \gexec" | psql -d nav

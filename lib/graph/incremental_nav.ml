@@ -36,14 +36,39 @@ type 'w etf =
   ; premium : (float option, 'w) Observer.t
   }
 
+module Affected = struct
+  type t =
+    { etf : string
+    ; offset : int
+    ; ts : Timestamp.t
+    }
+  [@@deriving compare, sexp]
+end
+
+(* One per ETF, reused across batches so marking a holder allocates nothing. It is in
+   the current batch when [epoch] is the state's. *)
+type mark =
+  { etf : string
+  ; mutable epoch : int
+  ; mutable offset : int
+  ; mutable ts : Timestamp.t
+  }
+
+type 'w price =
+  { var : (float, 'w) Var.t
+  ; mutable holders : mark list
+  }
+
 type 'w state =
   { incr : 'w Incremental.State.t
-  ; prices : (string, (float, 'w) Var.t) Hashtbl.t
+  ; prices : (string, 'w price) Hashtbl.t
   ; etf_prices : (string, (float option, 'w) Var.t) Hashtbl.t
   ; etfs : (string, 'w etf) Hashtbl.t
-  ; holders : (string, String.Hash_set.t) Hashtbl.t
+  ; marks : (string, mark) Hashtbl.t
   ; counters : counters
   ; changed : String.Hash_set.t
+  ; mutable epoch : int
+  ; mutable marked : mark list
   ; mutable rebalances : Rebalance.Book.t
   ; mutable stale : bool
   }
@@ -68,20 +93,52 @@ let create () =
     ; prices = Hashtbl.create (module String)
     ; etf_prices = Hashtbl.create (module String)
     ; etfs = Hashtbl.create (module String)
-    ; holders = Hashtbl.create (module String)
+    ; marks = Hashtbl.create (module String)
     ; counters = { positions = 0; sums = 0; navs = 0; premiums = 0; subgraphs = 0 }
     ; changed = String.Hash_set.create ()
+    ; epoch = 0
+    ; marked = []
     ; rebalances = Rebalance.Book.empty
     ; stale = false
     }
 ;;
 
 (* A missing price is NaN, as in [Full_recompute]. *)
-let price_var s symbol =
-  Hashtbl.find_or_add s.prices symbol ~default:(fun () ->
+let price s symbol =
+  match Hashtbl.find s.prices symbol with
+  | Some price -> price
+  | None ->
     let var = Var.create s.incr Float.nan in
     ignore (with_cutoff float_cutoff (Var.watch var) : (_, _) Incremental.t);
-    var)
+    let price = { var; holders = [] } in
+    Hashtbl.add_exn s.prices ~key:symbol ~data:price;
+    price
+;;
+
+let mark_of s etf =
+  match Hashtbl.find s.marks etf with
+  | Some mark -> mark
+  | None ->
+    let mark = { etf; epoch = -1; offset = 0; ts = Time_ns.epoch } in
+    Hashtbl.add_exn s.marks ~key:etf ~data:mark;
+    mark
+;;
+
+let mark s (m : mark) ~offset ~ts =
+  if m.epoch <> s.epoch
+  then (
+    m.epoch <- s.epoch;
+    s.marked <- m :: s.marked);
+  m.offset <- offset;
+  m.ts <- ts
+;;
+
+let rec mark_all s marks ~offset ~ts =
+  match marks with
+  | [] -> ()
+  | m :: rest ->
+    mark s m ~offset ~ts;
+    mark_all s rest ~offset ~ts
 ;;
 
 let etf_price_var s etf =
@@ -95,11 +152,9 @@ let positions_value s (composition : Composition.t) =
   let counters = s.counters in
   let leaves =
     Array.map composition.holdings ~f:(fun { Holding.symbol; units } ->
-      Incremental.map
-        (Var.watch (Hashtbl.find_exn s.prices symbol))
-        ~f:(fun price ->
-          counters.positions <- counters.positions + 1;
-          units *. price)
+      Incremental.map (Var.watch (Hashtbl.find_exn s.prices symbol).var) ~f:(fun price ->
+        counters.positions <- counters.positions + 1;
+        units *. price)
       |> with_cutoff float_cutoff)
   in
   Balanced.reduce leaves ~empty:(Incremental.const s.incr 0.) ~combine:(fun left right ->
@@ -148,24 +203,24 @@ let add_etf s (composition : Composition.t) =
     ~data:{ composition = composition_var; nav = observe nav; premium = observe premium }
 ;;
 
-let holders_of s symbol =
-  Hashtbl.find_or_add s.holders symbol ~default:String.Hash_set.create
-;;
-
 (* Same bookkeeping as [Full_recompute.set_composition], so both report the same
    affected ETFs. *)
 let set_holders s ~old (composition : Composition.t) =
+  let m = mark_of s composition.etf in
   Option.iter old ~f:(fun (old : Composition.t) ->
-    Array.iter old.holdings ~f:(fun h -> Hash_set.remove (holders_of s h.symbol) old.etf));
+    Array.iter old.holdings ~f:(fun h ->
+      let price = price s h.symbol in
+      price.holders <- List.filter price.holders ~f:(fun held -> not (phys_equal held m))));
   Array.iter composition.holdings ~f:(fun h ->
-    Hash_set.add (holders_of s h.symbol) composition.etf)
+    let price = price s h.symbol in
+    if not (List.mem price.holders m ~equal:phys_equal)
+    then price.holders <- m :: price.holders)
 ;;
 
 (* Returns whether the composition was applied. *)
 let set_composition s (composition : Composition.t) =
   (* Variables are created here, outside stabilization, so the bind only looks them up. *)
-  Array.iter composition.holdings ~f:(fun h ->
-    ignore (price_var s h.symbol : (_, _) Var.t));
+  Array.iter composition.holdings ~f:(fun h -> ignore (price s h.symbol : _ price));
   match Hashtbl.find s.etfs composition.etf with
   | None ->
     set_holders s ~old:None composition;
@@ -181,25 +236,29 @@ let set_composition s (composition : Composition.t) =
     else false
 ;;
 
-let apply ?(affected = ignore) ?(rebalance = ignore) (T s) (event : Event.t) =
+let apply (T s) ~offset (event : Event.t) =
   s.stale <- true;
   match event with
-  | Price { symbol; price; ts = _ } ->
-    Var.set (price_var s symbol) price;
-    Option.iter (Hashtbl.find s.holders symbol) ~f:(Hash_set.iter ~f:affected)
-  | Etf_price { etf; price; ts = _ } ->
+  | Price { symbol; price = value; ts } ->
+    let price = price s symbol in
+    Var.set price.var value;
+    mark_all s price.holders ~offset ~ts;
+    None
+  | Etf_price { etf; price; ts } ->
     Var.set (etf_price_var s etf) (Some price);
-    affected etf
-  | Composition { composition; ts = _ } ->
-    if set_composition s composition then affected composition.etf
+    mark s (mark_of s etf) ~offset ~ts;
+    None
+  | Composition { composition; ts } ->
+    if set_composition s composition then mark s (mark_of s composition.etf) ~offset ~ts;
+    None
   | Rebalance { etf; id; step; ts } ->
     let book, outcome = Rebalance.step s.rebalances ~etf ~id step ~ts in
     s.rebalances <- book;
-    rebalance outcome;
     (match outcome with
      | Accepted { applied = Some target; _ } ->
-       if set_composition s target then affected target.etf
-     | Accepted { applied = None; _ } | Invalid _ -> ())
+       if set_composition s target then mark s (mark_of s target.etf) ~offset ~ts
+     | Accepted { applied = None; _ } | Invalid _ -> ());
+    Some outcome
 ;;
 
 let stabilize (T s) =
@@ -213,6 +272,14 @@ let take_changed (T s) =
   let changed = Hash_set.to_list s.changed |> List.sort ~compare:String.compare in
   Hash_set.clear s.changed;
   changed
+;;
+
+let take_affected (T s) =
+  let marked = s.marked in
+  s.marked <- [];
+  s.epoch <- s.epoch + 1;
+  List.map marked ~f:(fun { etf; offset; ts; epoch = _ } -> { Affected.etf; offset; ts })
+  |> List.sort ~compare:(fun (a : Affected.t) b -> String.compare a.etf b.etf)
 ;;
 
 let observed s ~etf ~f =

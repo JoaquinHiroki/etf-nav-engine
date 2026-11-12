@@ -46,12 +46,11 @@ let run_both ~etfs events ~f =
   let incr = Incremental_nav.create () in
   List.iter events ~f:(fun event ->
     let affected = Full_recompute.apply full event in
-    let graph_affected = ref [] in
-    Incremental_nav.apply incr event ~affected:(fun etf ->
-      graph_affected := etf :: !graph_affected);
+    ignore (Incremental_nav.apply incr ~offset:0 event : Rebalance.Outcome.t option);
     [%test_result: string list]
       ~message:"affected etfs"
-      (List.sort !graph_affected ~compare:String.compare)
+      (Incremental_nav.take_affected incr
+       |> List.map ~f:(fun (a : Incremental_nav.Affected.t) -> a.etf))
       ~expect:affected;
     Incremental_nav.stabilize incr;
     check ~etfs:(etfs full) ~full ~incr;
@@ -209,18 +208,28 @@ let%expect_test "a tick recomputes one path through the tree" =
     Event.Composition { composition; ts }
   in
   let price symbol price = Event.Price { symbol; price; ts } in
+  let offset = ref 0 in
   let step label events =
-    List.iter events ~f:(Incremental_nav.apply incr);
+    List.iter events ~f:(fun event ->
+      ignore
+        (Incremental_nav.apply incr ~offset:!offset event : Rebalance.Outcome.t option);
+      offset := !offset + 1);
     Incremental_nav.stabilize incr;
     let r = Incremental_nav.recomputes incr in
+    let affected =
+      Incremental_nav.take_affected incr
+      |> List.map ~f:(fun { Incremental_nav.Affected.etf; offset; ts = _ } ->
+        sprintf "%s@%d" etf offset)
+    in
     printf
-      "%s: positions %d, sums %d, navs %d, premiums %d, subgraphs %d\n"
+      "%s: positions %d, sums %d, navs %d, premiums %d, subgraphs %d, affected [%s]\n"
       label
       r.positions
       r.sums
       r.navs
       r.premiums
-      r.subgraphs;
+      r.subgraphs
+      (String.concat ~sep:" " affected);
     Incremental_nav.reset_recomputes incr
   in
   let a_symbols = List.init 8 ~f:(sprintf "S%d") in
@@ -239,20 +248,22 @@ let%expect_test "a tick recomputes one path through the tree" =
   step "stale composition" [ composition ~version:1 "A" a_symbols ];
   [%expect
     {|
-    setup: positions 10, sums 8, navs 2, premiums 2, subgraphs 2
-    tick S0: positions 1, sums 3, navs 1, premiums 1, subgraphs 0
-    same price again: positions 0, sums 0, navs 0, premiums 0, subgraphs 0
-    tick S7, held by both: positions 2, sums 4, navs 2, premiums 2, subgraphs 0
-    etf price: positions 0, sums 0, navs 0, premiums 1, subgraphs 0
-    swap A to 3 holdings: positions 3, sums 2, navs 1, premiums 1, subgraphs 1
-    tick S7, now only B: positions 1, sums 1, navs 1, premiums 1, subgraphs 0
-    tick S5, held by none: positions 0, sums 0, navs 0, premiums 0, subgraphs 0
-    stale composition: positions 0, sums 0, navs 0, premiums 0, subgraphs 0 |}]
+    setup: positions 10, sums 8, navs 2, premiums 2, subgraphs 2, affected [A@11 B@10]
+    tick S0: positions 1, sums 3, navs 1, premiums 1, subgraphs 0, affected [A@12]
+    same price again: positions 0, sums 0, navs 0, premiums 0, subgraphs 0, affected [A@13]
+    tick S7, held by both: positions 2, sums 4, navs 2, premiums 2, subgraphs 0, affected [A@14 B@14]
+    etf price: positions 0, sums 0, navs 0, premiums 1, subgraphs 0, affected [A@15]
+    swap A to 3 holdings: positions 3, sums 2, navs 1, premiums 1, subgraphs 1, affected [A@16]
+    tick S7, now only B: positions 1, sums 1, navs 1, premiums 1, subgraphs 0, affected [B@17]
+    tick S5, held by none: positions 0, sums 0, navs 0, premiums 0, subgraphs 0, affected []
+    stale composition: positions 0, sums 0, navs 0, premiums 0, subgraphs 0, affected [] |}]
 ;;
 
 let%test_unit "reading before stabilize raises" =
   let incr = Incremental_nav.create () in
-  Incremental_nav.apply incr (Event.Price { symbol = "A"; price = 1.; ts });
+  ignore
+    (Incremental_nav.apply incr ~offset:0 (Event.Price { symbol = "A"; price = 1.; ts })
+     : Rebalance.Outcome.t option);
   [%test_pred: float option Or_error.t]
     Result.is_error
     (Or_error.try_with (fun () -> Incremental_nav.nav incr ~etf:"X"))

@@ -51,12 +51,8 @@ let compute state (record : Source.record) =
   in
   let navs =
     List.map affected ~f:(fun etf ->
-      { Nav_update.etf
-      ; nav = Full_recompute.nav state ~etf
-      ; premium = Full_recompute.premium state ~etf
-      ; source_offset = record.offset
-      ; ts
-      })
+      let nav, premium = Full_recompute.nav_and_premium state ~etf in
+      { Nav_update.etf; nav; premium; source_offset = record.offset; ts })
   in
   { offset = record.offset; event = record.event; navs; rebalance = !rebalance }
 ;;

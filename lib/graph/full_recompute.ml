@@ -5,7 +5,7 @@ type t =
   { prices : (string, float) Hashtbl.t
   ; etf_prices : (string, float) Hashtbl.t
   ; compositions : (string, Composition.t) Hashtbl.t
-  ; holders : (string, String.Hash_set.t) Hashtbl.t
+  ; holders : (string, String.Set.t) Hashtbl.t
   ; mutable rebalances : Rebalance.Book.t
   }
 
@@ -18,15 +18,14 @@ let create () =
   }
 ;;
 
-let holders_of t symbol =
-  Hashtbl.find_or_add t.holders symbol ~default:String.Hash_set.create
-;;
-
 let set_composition t (composition : Composition.t) =
   Option.iter (Hashtbl.find t.compositions composition.etf) ~f:(fun old ->
-    Array.iter old.holdings ~f:(fun h -> Hash_set.remove (holders_of t h.symbol) old.etf));
+    Array.iter old.holdings ~f:(fun h ->
+      Hashtbl.change t.holders h.symbol ~f:(Option.map ~f:(Fn.flip Set.remove old.etf))));
   Array.iter composition.holdings ~f:(fun h ->
-    Hash_set.add (holders_of t h.symbol) composition.etf);
+    Hashtbl.update t.holders h.symbol ~f:(function
+      | None -> String.Set.singleton composition.etf
+      | Some holders -> Set.add holders composition.etf));
   Hashtbl.set t.compositions ~key:composition.etf ~data:composition
 ;;
 
@@ -48,8 +47,7 @@ let apply ?(rebalance = ignore) t (event : Event.t) =
   match event with
   | Price { symbol; price; ts = _ } ->
     Hashtbl.set t.prices ~key:symbol ~data:price;
-    Option.value_map (Hashtbl.find t.holders symbol) ~default:[] ~f:(fun holders ->
-      Hash_set.to_list holders |> List.sort ~compare:String.compare)
+    Option.value_map (Hashtbl.find t.holders symbol) ~default:[] ~f:Set.to_list
   | Etf_price { etf; price; ts = _ } ->
     Hashtbl.set t.etf_prices ~key:etf ~data:price;
     [ etf ]
@@ -89,8 +87,15 @@ let nav t ~etf =
 let etf_price t ~etf = Hashtbl.find t.etf_prices etf
 let rebalances t = t.rebalances
 
-let premium t ~etf =
-  let%bind.Option nav = nav t ~etf in
+let premium_of t ~etf nav =
+  let%bind.Option nav = nav in
   let%map.Option etf_price = etf_price t ~etf in
   Nav.premium ~etf_price ~nav
+;;
+
+let premium t ~etf = premium_of t ~etf (nav t ~etf)
+
+let nav_and_premium t ~etf =
+  let nav = nav t ~etf in
+  nav, premium_of t ~etf nav
 ;;

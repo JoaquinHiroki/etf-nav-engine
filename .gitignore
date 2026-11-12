@@ -3,3 +3,4 @@ _opam/
 *.install
 .DS_Store
 data/generated/
+bench/results.md.tmp

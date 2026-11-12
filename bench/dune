@@ -1,0 +1,13 @@
+(executables
+ (names micro macro)
+ (libraries
+  core
+  core_bench
+  core_unix
+  core_unix.command_unix
+  nav_domain
+  nav_engine
+  nav_graph
+  nav_store)
+ (preprocess
+  (pps ppx_jane)))

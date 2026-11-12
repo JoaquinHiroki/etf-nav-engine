@@ -223,6 +223,135 @@ goes is each row's header and repeated columns. A second `make compact` rewrote 
 
 ## 10. Benchmarks and report
 
-- `Core_bench` microbenchmarks by basket size and overlap.
-- Five runs, median and range, machine and Postgres settings recorded.
+- `Core_bench` microbenchmarks by basket size and overlap: one tick, a composition swap,
+  and every symbol ticking between reads (`bench/micro.ml`).
+- Engine runs as separate processes, five rounds interleaved, median and range; machine,
+  Docker, Postgres and generator settings recorded (`bench/macro.ml`).
+- `make bench` writes [bench/results.md](../bench/results.md). A failed run shows in its
+  row and makes `make bench` exit non-zero.
 - README with results, including the cases where incremental loses.
+
+Measured 2026-11-12 on the development laptop (Intel Core i5-8257U, 4 cores, 8 threads,
+8 GiB; Docker Desktop with 8 CPUs and 3.8 GiB; Postgres 16.4 with default settings,
+`synchronous_commit` on; Redpanda stopped), reading the 10M-event file from `make data`.
+`make bench` took 1 h 7 min.
+
+`make oracle`: 0 mismatches and 0 batches with different affected ETFs at batch sizes 1,
+100 and 1000, over 24.6M, 9.2M and 1.0M ETF checks, with 51,675 accepted rebalance steps
+and 0 invalid ones.
+
+### Engine
+
+Median of five rounds, `-writer none`:
+
+| Model | Batch | Events/s | Range | p50 | p99 | Stage 7, single run |
+|-------|-------|----------|-------|-----|-----|---------------------|
+| full | 1 | 71,400 | 39,400–92,000 | 10 µs | 49 µs | 102,900 |
+| full | 100 | 61,700 | 39,600–84,500 | 1.24 ms | 5.68 ms | 105,700 |
+| full | 1000 | 64,800 | 43,900–73,100 | 12.6 ms | 40.9 ms | 99,400 |
+| incremental | 1 | 117,100 | 75,800–155,800 | 6 µs | 27 µs | 190,000 |
+| incremental | 100 | 191,500 | 122,900–216,500 | 388 µs | 1.37 ms | 258,900 |
+| incremental | 1000 | 377,900 | 324,300–401,200 | 1.83 ms | 4.85 ms | 418,100 |
+
+The ranges are wide and every median is below stage 7's single runs. The laptop throttles
+under sustained load (`pmset -g therm` shows `CPU_Speed_Limit` falling to about 70%), and
+a single run varies by up to 40%. Incremental is 1.6 times faster than full recompute at
+batch 1, 3.1 times at 100 and 5.8 times at 1000 (stage 7: 1.85, 2.45, 4.2).
+
+Full recompute evaluates 50 positions and 49 sums per NAV update, about 2.4 billion
+nodes for this stream. The incremental graph evaluates 164M at batch 1 and 57.7M at batch
+1000, 15 and 42 times fewer. At batch 1, 15 times fewer nodes give 1.6 times the
+throughput: decoding, hash lookups and Incremental's cost per stabilization dominate.
+
+### Regressions since stage 8
+
+Stage 8's `make oracle` ran at about half stage 7's speed, and two causes were left
+unseparated: services running alongside, and the per-ETF offsets added to the model. A
+first five-round `make bench` on 2026-11-11 showed the same gap outside `-model checked`
+(full 46,400, 35,100 and 40,500 events/s at batch 1, 100 and 1000; incremental 122,700,
+190,800 and 311,200). Measuring the commits one against another found two regressions in
+the code:
+
+- Full recompute computed each NAV twice: `Change.compute` called `nav` and then
+  `premium`, which calls `nav` again. `Full_recompute.nav_and_premium` computes it once.
+  Holders of a symbol are now an immutable sorted set, so a tick no longer sorts them.
+- The incremental model allocated about 64 more words per event than in stage 7: a hash
+  table of offset and timestamp tuples per batch, closures and refs for `apply`'s
+  callbacks, and a `zip` of records with rebalance outcomes. `Incremental_nav` now keeps
+  one reusable mark per ETF, and holders on each symbol's price entry. `apply ~offset`
+  returns the rebalance outcome, `take_affected` returns the batch's marks, and
+  `Model.step` is one fold. Over 2M events at batch 1000, minor words went from 305M to
+  174M (stage 7: 177M).
+
+Incremental model, 2M events, `-writer none`, best of eight runs on the same day. Best of
+eight is closer to the speed of a cool machine, so it compares code better than a median:
+
+| Code | Batch 1 | Batch 1000 |
+|------|---------|------------|
+| Stage 7 | 215,000 | 580,000 |
+| Stage 9 | 161,000 | 375,000 |
+| Stage 10 | 198,000 | 523,000 |
+| Stage 10, rebalances ignored | 204,000 | 535,000 |
+
+The remaining 8 to 10% is work stage 7 did not do: rebalance steps, and an offset and
+timestamp per ETF in each NAV update. Against the 2026-11-11 medians, full recompute is
+54 to 76% faster at every batch size, and incremental is 21% faster at batch 1000; at
+batch 1 and 100 the medians moved less than their ranges.
+
+### Writers
+
+Incremental model, median of five rounds. Statements count each multi-row upsert once:
+
+| Writer | Batch | Events | Events/s | p50 | p99 | Statements/event |
+|--------|-------|--------|----------|-----|-----|------------------|
+| baseline | 1 | 2,000 | 105 | 8.75 ms | 23.9 ms | 13.27 |
+| optimized | 1 | 2,000 | 259 | 3.44 ms | 9.66 ms | 2.93 |
+| optimized | 100 | 200,000 | 10,100 | 8.68 ms | 25.3 ms | 0.042 |
+| optimized | 1000 | 1M | 33,200 | 25.6 ms | 87.2 ms | 0.005 |
+
+The optimized writer at batch 1000 is 316 times faster than the baseline, and 11 times
+slower than the same engine without a writer: Postgres still limits the service. The
+baseline ran at 60 events/s in stage 8 over 20,000 events with Redpanda up; these runs
+use fewer events and Redpanda stopped, and the two have not been separated.
+
+### Microbenchmarks
+
+Sixteen ETFs; every symbol is held by `overlap` of them. Speedup is full recompute's time
+over incremental's, below 1 where incremental loses. Two runs on the same day: the
+published one, and one from a `make bench` interrupted in its engine section. Times
+moved by up to 2.5 times between them (one tick at basket 512, overlap 1: 1.63 µs and
+3.32 µs incremental); allocations were identical to the word.
+
+One tick, then the NAVs of the ETFs that hold it:
+
+| Basket | Overlap 1 | Overlap 4 | Overlap 16 |
+|--------|-----------|-----------|------------|
+| 8 | 0.88, 1.08 | 0.44, 0.88 | |
+| 32 | 4.7, 2.5 | 2.4, 2.1 | 1.4, 2.1 |
+| 128 | 7.7, 6.6 | 3.1, 7.0 | 1.5, 6.5 |
+| 512 | 28, 23 | 29, 25 | 21, 22 |
+
+A composition swap of one ETF, a tenth of its holdings moved, overlap 1; and every symbol
+ticking once before every NAV is read, overlap 4:
+
+| Basket | Swap | All ticks |
+|--------|------|-----------|
+| 8 | 0.66, 0.38 | 0.61, 0.63 |
+| 32 | 0.59, 0.72 | 0.65, 0.73 |
+| 128 | 0.53, 0.48 | 0.63, 0.66 |
+| 512 | 0.47, 0.39 | 0.40, 0.54 |
+
+Incremental loses in three cases:
+
+- Swaps, 1.4 to 2.6 times slower at every basket size. The graph builds a new subgraph
+  for the ETF: at basket 512 it allocates 89,184 minor and 51,988 major words, against
+  51,062 and 8,066 for full recompute.
+- Every symbol ticking between reads, 1.4 to 2.5 times slower, while allocating 30 to 40%
+  fewer minor words. Every node changes, so the bookkeeping Incremental does per node
+  saves nothing.
+- Small baskets held by several ETFs: at basket 8, overlap 4, 1.1 to 2.3 times slower;
+  at overlap 1 it is even.
+
+With baskets of 32 or more, a tick is 1.4 to 29 times faster. Two runs are not enough to
+rank the cases in between: at basket 128, overlap 16, the speedup was 1.5 in one run and
+6.5 in the other.

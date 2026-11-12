@@ -34,6 +34,10 @@
    (and
     (>= v0.16)
     (< v0.17)))
+  (core_bench
+   (and
+    (>= v0.16)
+    (< v0.17)))
   (kafka
    (= 0.5))
   (postgresql

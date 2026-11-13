@@ -7,7 +7,7 @@ runs=${RUNS:-5}
 scale=${SCALE:-1}
 quota=${QUOTA:-2s}
 data=data/generated/synthetic.events
-out=bench/results.md
+out=${OUT:-bench/results.md}
 build=_build/default
 status=0
 

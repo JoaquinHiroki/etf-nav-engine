@@ -355,3 +355,46 @@ Incremental loses in three cases:
 With baskets of 32 or more, a tick is 1.4 to 29 times faster. Two runs are not enough to
 rank the cases in between: at basket 128, overlap 16, the speedup was 1.5 in one run and
 6.5 in the other.
+
+### Exit test
+
+On a fresh copy of the repository, `make setup` took 16 min 35 s and produced a data
+file with the same SHA-256 as the published one (`83166589…`), and
+`SCALE=1 RUNS=1 make bench` completed in 11 min 50 s. That copy was deleted before its
+results were compared. A second one-round `make bench` at commit 49517fe on 2026-11-13
+(11 min 37 s, written outside the tree with `OUT`) is compared here with the five
+published rounds.
+
+Reproduced exactly: the generator summary, the Postgres settings, and every count in the
+engine table, meaning events, NAV updates, recomputes and statements per event, for each
+model, writer and batch size. Microbenchmark allocations agree within 1.3%.
+
+Throughput did not reproduce within the published ranges. Eight of the ten engine rows
+ran faster than the fastest published round:
+
+| Run | Batch | Published median | Published range | Rerun |
+|-----|-------|------------------|-----------------|-------|
+| full | 1 | 71,400 | 39,400–92,000 | 66,000 |
+| full | 100 | 61,700 | 39,600–84,500 | 66,900 |
+| full | 1000 | 64,800 | 43,900–73,100 | 90,000 |
+| incremental | 1 | 117,100 | 75,800–155,800 | 176,200 |
+| incremental | 100 | 191,500 | 122,900–216,500 | 257,800 |
+| incremental | 1000 | 377,900 | 324,300–401,200 | 412,700 |
+| baseline writer | 1 | 105 | 43–114 | 115 |
+| optimized writer | 1 | 259 | 114–281 | 285 |
+| optimized writer | 100 | 10,100 | 6,700–10,800 | 13,600 |
+| optimized writer | 1000 | 33,200 | 21,100–38,700 | 48,500 |
+
+Incremental over full was 2.7, 3.9 and 4.6 times at batch 1, 100 and 1000 (published:
+1.6, 3.1, 5.8). One round of 12 minutes heats the laptop less than five rounds over 67
+minutes, which may explain the faster rerun; throttling was not recorded during either
+run. On this machine the published medians are closer to a lower bound than to its speed.
+
+In the microbenchmarks, incremental lost in the same three cases: swaps (0.38 to 0.67),
+every symbol ticking (0.34 to 0.80), and basket 8 at overlap 4 (0.71). At basket 8,
+overlap 1, it won by 1.17. One tick at basket 512, overlap 4 gave a speedup of 4.7
+against 29 and 25 in the earlier runs: incremental took 49 µs, against 11 µs published.
+
+The exit test passes for every count and for which model wins in each case. It does not
+pass for throughput: the rerun ran between 8% slower and 50% faster than the published
+medians.

@@ -69,7 +69,8 @@ caffeinate -i make bench    # about 1 h 10 min; writes bench/results.md
 
 `make bench` generates the event file if it is missing, stops Redpanda, starts Postgres,
 and records the machine, Docker, Postgres and generator settings next to the numbers.
-`SCALE=0.1 RUNS=1 make bench` gives a quick check.
+`SCALE=0.1 RUNS=1 make bench` gives a quick check, and `OUT=path` writes the results
+somewhere other than `bench/results.md`.
 
 ## Documentation
 
